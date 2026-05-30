@@ -35,6 +35,42 @@ export const api = {
   del: <T = any>(p: string) => req<T>('DELETE', p),
 }
 
+const MAX_UPLOAD_IMAGE_BYTES = 10 * 1024 * 1024
+
+/** 上传图片到本地 static，返回相对路径 */
+export async function uploadImageFile(file: File): Promise<{ url: string; path: string }> {
+  if (!file.type.startsWith('image/')) {
+    throw new Error('仅支持上传图片文件')
+  }
+  if (file.size > MAX_UPLOAD_IMAGE_BYTES) {
+    throw new Error('图片大小不能超过 10MB')
+  }
+
+  const form = new FormData()
+  form.append('file', file)
+  const start = performance.now()
+  console.log('%c[API] %cPOST %c/upload/image', 'color:#888', 'color:#4fc3f7;font-weight:bold', 'color:#ccc', file.name)
+
+  const resp = await fetch(`${BASE}/upload/image`, { method: 'POST', body: form })
+  const json = await resp.json()
+  const ms = Math.round(performance.now() - start)
+
+  if (!resp.ok || (json.code && json.code >= 400)) {
+    console.log(`%c[API] %cPOST /upload/image %c${resp.status} %c${ms}ms`, 'color:#888', 'color:#ef5350', 'color:#ef5350;font-weight:bold', 'color:#888', json.message || '')
+    throw new Error(json.message || `${resp.status}`)
+  }
+
+  console.log(`%c[API] %cPOST /upload/image %c${resp.status} %c${ms}ms`, 'color:#888', 'color:#66bb6a', 'color:#66bb6a;font-weight:bold', 'color:#888')
+  const data = json.data ?? json
+  const path = data.path || (data.url ? String(data.url).replace(/^\//, '') : '')
+  if (!path) throw new Error('上传成功但未返回文件路径')
+  return { url: data.url || `/${path}`, path }
+}
+
+export const uploadAPI = {
+  image: uploadImageFile,
+}
+
 export const dramaAPI = {
   list: () => api.get<{ items: any[] }>('/dramas'),
   get: (id: number) => api.get(`/dramas/${id}`),

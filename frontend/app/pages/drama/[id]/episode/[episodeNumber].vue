@@ -762,16 +762,29 @@
                   <div v-else class="asset-cover-empty">
                     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
                   </div>
-                  <span class="asset-cover-badge" :class="(c.image_url || c.imageUrl) ? 'is-ready' : (isPendingCharImage(c.id) ? 'is-pending' : '')">{{ (c.image_url || c.imageUrl) ? '已生成' : (isPendingCharImage(c.id) ? '生成中' : '待生成') }}</span>
+                  <span class="asset-cover-badge" :class="(c.image_url || c.imageUrl) ? 'is-ready' : (isCharImageBusy(c.id) ? 'is-pending' : '')">{{ charImageStatusLabel(c) }}</span>
                 </div>
                 <div class="asset-body">
                   <div class="asset-name">{{ c.name }}</div>
                   <div class="asset-meta dim">{{ c.role || '角色' }}</div>
                 </div>
                 <div class="asset-foot">
-                  <span :class="['dot', (c.image_url || c.imageUrl) && 'ok', isPendingCharImage(c.id) && 'pending']" />
-                  <span class="dim" style="font-size:10px">{{ (c.image_url || c.imageUrl) ? '已生成' : (isPendingCharImage(c.id) ? '生成中' : '待生成') }}</span>
-                  <button class="btn btn-sm ml-auto" :disabled="isPendingCharImage(c.id)" @click="genCharImg(c.id)">{{ isPendingCharImage(c.id) ? '生成中' : '生成' }}</button>
+                  <span :class="['dot', (c.image_url || c.imageUrl) && 'ok', isCharImageBusy(c.id) && 'pending']" />
+                  <span class="dim" style="font-size:10px">{{ charImageStatusLabel(c) }}</span>
+                  <div class="asset-foot-actions ml-auto">
+                    <input
+                      :id="`char-upload-${c.id}`"
+                      type="file"
+                      accept="image/jpeg,image/png,image/webp,image/gif"
+                      class="asset-file-input"
+                      :disabled="isCharImageBusy(c.id)"
+                      @change="onCharImageUpload(c, $event)"
+                    />
+                    <label :for="`char-upload-${c.id}`" :class="['btn btn-sm', { disabled: isCharImageBusy(c.id) }]">
+                      {{ isPendingCharUpload(c.id) ? '上传中' : '上传' }}
+                    </label>
+                    <button class="btn btn-sm" :disabled="isCharImageBusy(c.id)" @click="genCharImg(c.id)">{{ isPendingCharImage(c.id) ? '生成中' : '生成' }}</button>
+                  </div>
                 </div>
               </div>
             </div>
@@ -1440,7 +1453,7 @@ import { toast } from 'vue-sonner'
 import {
   Users, MapPin, Video, ImageIcon, Layers, Mic2, FileText, FolderKanban, Clapperboard, Download,
 } from 'lucide-vue-next'
-import { dramaAPI, episodeAPI, storyboardAPI, characterAPI, sceneAPI, imageAPI, videoAPI, composeAPI, mergeAPI, gridAPI, aiConfigAPI, voicesAPI } from '~/composables/useApi'
+import { dramaAPI, episodeAPI, storyboardAPI, characterAPI, sceneAPI, imageAPI, videoAPI, composeAPI, mergeAPI, gridAPI, aiConfigAPI, voicesAPI, uploadAPI } from '~/composables/useApi'
 import { useAgent } from '~/composables/useAgent'
 import BaseSelect from '~/components/BaseSelect.vue'
 
@@ -1499,6 +1512,7 @@ const imageConfigs = ref([])
 const videoConfigs = ref([])
 const audioConfigs = ref([])
 const pendingCharImageIds = ref([])
+const pendingCharUploadIds = ref([])
 const pendingSceneImageIds = ref([])
 const pendingShotFrameKeys = ref([])
 const pendingVideoIds = ref([])
@@ -1516,6 +1530,21 @@ function configLabel(config) {
 
 function isPendingCharImage(id) {
   return pendingCharImageIds.value.includes(id)
+}
+
+function isPendingCharUpload(id) {
+  return pendingCharUploadIds.value.includes(id)
+}
+
+function isCharImageBusy(id) {
+  return isPendingCharImage(id) || isPendingCharUpload(id)
+}
+
+function charImageStatusLabel(c) {
+  if (isPendingCharUpload(c.id)) return '上传中'
+  if (isPendingCharImage(c.id)) return '生成中'
+  if (c.image_url || c.imageUrl) return '已有形象'
+  return '待生成'
 }
 
 function openImageViewer(src, title = '') {
@@ -2491,6 +2520,31 @@ function watchAsyncResult(check, attempts = 24, delay = 2500) {
       if (check()) return
     }
   })()
+}
+
+async function onCharImageUpload(char, event) {
+  const input = event.target
+  const file = input?.files?.[0]
+  if (input) input.value = ''
+  if (!file) return
+
+  const id = char.id
+  try {
+    if (!isPendingCharUpload(id)) pendingCharUploadIds.value.push(id)
+    const { path } = await uploadAPI.image(file)
+    await characterAPI.update(id, { image_url: path })
+    const target = chars.value.find(c => c.id === id)
+    if (target) {
+      target.image_url = path
+      target.imageUrl = path
+    }
+    toast.success(`${char.name} 形象已上传`)
+    await refresh()
+  } catch (e) {
+    toast.error(e?.message || '上传失败')
+  } finally {
+    pendingCharUploadIds.value = pendingCharUploadIds.value.filter(item => item !== id)
+  }
 }
 
 async function genCharImg(id) {
@@ -3662,6 +3716,18 @@ onMounted(() => { refresh(); loadConfigs(); loadVoices() })
 .asset-name { font-size: 13px; font-weight: 600; }
 .asset-meta { font-size: 11px; }
 .asset-foot { display: flex; align-items: center; gap: 4px; padding: 6px 10px; border-top: 1px solid var(--border); }
+.asset-foot-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+.asset-file-input {
+  position: absolute;
+  width: 0;
+  height: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+.asset-foot-actions label.btn.disabled {
+  pointer-events: none;
+  opacity: 0.45;
+}
 
 /* Frame grid */
 .frame-grid { display: flex; flex-direction: column; gap: 8px; }
