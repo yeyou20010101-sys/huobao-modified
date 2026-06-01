@@ -13,6 +13,27 @@ export interface AIConfig {
   baseUrl: string
   apiKey: string
   model: string
+  settings?: Record<string, unknown>
+}
+
+function parseSettingsJson(raw: string | null | undefined): Record<string, unknown> {
+  if (!raw) return {}
+  try {
+    const parsed = JSON.parse(raw)
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {}
+  } catch {
+    return {}
+  }
+}
+
+function mapConfigRow(row: typeof schema.aiServiceConfigs.$inferSelect, models: string[]): AIConfig {
+  return {
+    provider: row.provider || '',
+    baseUrl: row.baseUrl,
+    apiKey: row.apiKey,
+    model: models[0] || '',
+    settings: parseSettingsJson(row.settings),
+  }
 }
 
 function parseModelsJson(
@@ -89,12 +110,7 @@ export function getActiveConfig(serviceType: ServiceType): AIConfig | null {
     model: models[0] || '',
     priority: active.priority,
   })
-  return {
-    provider: active.provider || '',
-    baseUrl: active.baseUrl,
-    apiKey: active.apiKey,
-    model: models[0] || '',
-  }
+  return mapConfigRow(active, models)
 }
 
 export function getTextConfig(): AIConfig {
@@ -131,10 +147,5 @@ export function getConfigById(id: number): AIConfig | null {
     model: models[0] || '',
     serviceType: row.serviceType,
   })
-  return {
-    provider: row.provider || '',
-    baseUrl: row.baseUrl,
-    apiKey: row.apiKey,
-    model: models[0] || '',
-  }
+  return mapConfigRow(row, models)
 }

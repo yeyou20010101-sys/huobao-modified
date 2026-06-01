@@ -13,29 +13,40 @@ import type {
 } from './types'
 import { joinProviderUrl } from './url'
 
+type SeedanceImageRole = 'first_frame' | 'last_frame' | 'reference_image'
+
 export class VolcEngineVideoAdapter implements VideoProviderAdapter {
   provider = 'volcengine'
+
+  private pushImageContent(content: any[], url: string, role: SeedanceImageRole) {
+    content.push({
+      type: 'image_url',
+      image_url: { url },
+      role,
+    })
+  }
 
   buildGenerateRequest(config: AIConfig, record: VideoGenerationRecord): ProviderRequest {
     const model = record.model || config.model || 'doubao-seedance-2-0-fast-260128'
 
     const content: any[] = [{ type: 'text', text: record.prompt || '' }]
 
-    // 添加参考图
+    // Seedance 2.x 要求每张 image_url 必须带 role，否则会 InvalidParameter
     if (record.referenceMode === 'single' && record.imageUrl) {
-      content.push({ type: 'image_url', image_url: { url: record.imageUrl } })
+      this.pushImageContent(content, record.imageUrl, 'first_frame')
     } else if (record.referenceMode === 'first_last') {
       if (record.firstFrameUrl) {
-        content.push({ type: 'image_url', image_url: { url: record.firstFrameUrl }, role: 'first_frame' })
+        this.pushImageContent(content, record.firstFrameUrl, 'first_frame')
       }
       if (record.lastFrameUrl) {
-        content.push({ type: 'image_url', image_url: { url: record.lastFrameUrl }, role: 'last_frame' })
+        this.pushImageContent(content, record.lastFrameUrl, 'last_frame')
       }
     } else if (record.referenceMode === 'multiple' && record.referenceImageUrls) {
+      // Seedance 禁止 first_frame/last_frame 与 reference_image 混用
       try {
-        const refs = JSON.parse(record.referenceImageUrls)
-        for (const url of refs) {
-          content.push({ type: 'image_url', image_url: { url } })
+        const urls = (JSON.parse(record.referenceImageUrls) as string[]).filter(Boolean)
+        for (const url of urls) {
+          this.pushImageContent(content, url, 'reference_image')
         }
       } catch {}
     }

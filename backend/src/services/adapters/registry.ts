@@ -4,7 +4,9 @@
  */
 import { MiniMaxImageAdapter } from './minimax-image'
 import { MiniMaxVideoAdapter } from './minimax-video'
-import { MiniMaxTTSAdapter } from './minimax-tts'
+import { MiniMaxTTSAdapter } from './minimax-tts.js'
+import { AliTTSAdapter } from './ali-tts.js'
+import { VolcEngineTTSAdapter } from './volcengine-tts.js'
 import { OpenAIImageAdapter } from './openai-image'
 import { GeminiImageAdapter } from './gemini-image'
 import { VolcEngineImageAdapter } from './volcengine-image'
@@ -37,10 +39,17 @@ export const videoAdapters: Record<string, VideoProviderAdapter> = {
 // TTS Adapter 注册表
 export const ttsAdapters: Record<string, TTSProviderAdapter> = {
   minimax: new MiniMaxTTSAdapter(),
+  ali: new AliTTSAdapter(),
+  volcengine: new VolcEngineTTSAdapter(),
 }
 
 export function getTTSAdapter(provider: string): TTSProviderAdapter {
-  return ttsAdapters[provider.toLowerCase()] || ttsAdapters['minimax']
+  const key = provider.toLowerCase()
+  const adapter = ttsAdapters[key]
+  if (!adapter) {
+    throw new Error(`不支持的 TTS 服务商: ${provider}，请在设置中使用 minimax / ali / volcengine`)
+  }
+  return adapter
 }
 
 /**

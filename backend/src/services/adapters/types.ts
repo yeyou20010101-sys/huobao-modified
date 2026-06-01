@@ -73,6 +73,18 @@ export interface AIConfig {
   baseUrl: string
   apiKey: string
   model: string
+  settings?: Record<string, unknown>
+}
+
+export interface TTSParsedAudio {
+  audioHex?: string
+  audioBase64?: string
+  audioUrl?: string
+  audioLength: number
+  sampleRate: number
+  bitrate: number
+  format: string
+  channel: number
 }
 
 export interface ImageGenerationRecord {
@@ -132,12 +144,5 @@ export interface TTSProviderAdapter {
 
   buildGenerateRequest(config: AIConfig, params: any): ProviderRequest
 
-  parseResponse(result: any): {
-    audioHex: string
-    audioLength: number
-    sampleRate: number
-    bitrate: number
-    format: string
-    channel: number
-  }
+  parseResponse(result: any): TTSParsedAudio
 }

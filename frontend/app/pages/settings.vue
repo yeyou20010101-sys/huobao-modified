@@ -55,7 +55,7 @@
             </button>
           </div>
           <div class="preset-grid">
-            <article v-for="preset in huobaoPresetCards" :key="preset.serviceType" class="preset-card">
+            <article v-for="preset in huobaoPresetCards" :key="`${preset.serviceType}-${preset.provider}`" class="preset-card">
               <div class="preset-card-top">
                 <span class="preset-service">{{ preset.label }}</span>
                 <span class="tag tag-accent">{{ preset.provider }}</span>
@@ -91,6 +91,7 @@
                 <div class="section-subtitle">{{ serviceMeta[st.type].desc }}</div>
               </div>
               <span v-if="countActive(st.type)" class="tag tag-accent">{{ countActive(st.type) }} 已启用</span>
+              <button v-if="st.type === 'audio'" class="btn btn-ghost btn-sm" @click="syncBuiltinVoices">同步音色</button>
               <button class="btn btn-ghost btn-sm ml-auto" @click="startAddCfg(st.type)"><Plus :size="13" /> 添加</button>
             </div>
             <div class="config-list">
@@ -311,6 +312,11 @@
           <span class="mono">{{ endpointHint }}</span>
         </div>
         <label class="field"><span class="field-label">模型（逗号分隔）</span><input v-model="cfgForm.modelStr" class="input" placeholder="model-name" /></label>
+        <label v-if="cfgForm.service_type === 'audio' && cfgForm.provider === 'volcengine'" class="field">
+          <span class="field-label">豆包语音 App ID</span>
+          <input v-model="cfgForm.volcengineTtsAppId" class="input" placeholder="控制台应用 AppID" />
+          <span class="field-hint">API Key 填 Access Token；与方舟图片 Key 不同，需在<a href="https://console.volcengine.com/speech/service/10007" target="_blank" rel="noopener">豆包语音控制台</a>开通。</span>
+        </label>
         <div v-if="cfgTestResult" class="test-result" :class="{ ok: cfgTestResult.reachable, bad: !cfgTestResult.reachable }">
           <div class="test-result-head">
             <span class="tag" :class="cfgTestResult.reachable ? 'tag-success' : 'tag-error'">{{ cfgTestResult.status || 'ERROR' }}</span>
@@ -353,8 +359,9 @@
             <span class="field-hint"><a href="https://console.volcengine.com/ark/region:ark+cn-beijing/apikey" target="_blank" rel="noopener">方舟控制台获取 Key →</a></span>
           </label>
           <label class="field">
-            <span class="field-label">音频 API Key <span class="dim">(可选，MiniMax / ChatFire)</span></span>
-            <input v-model="huobaoForm.audioApiKey" class="input" type="password" placeholder="不填则跳过音频服务配置" />
+            <span class="field-label">音频 API Key <span class="dim">(可选，仅 MiniMax 通道)</span></span>
+            <input v-model="huobaoForm.audioApiKey" class="input" type="password" placeholder="不填则只配置百炼 CosyVoice 音频" />
+            <span class="field-hint">百炼音频复用上方阿里云 Key；豆包语音需在「添加音频服务」中单独配置。</span>
           </label>
         </div>
         <div class="preset-grid compact">
@@ -403,7 +410,7 @@
 import { Plus, Pencil, Trash2, FileText, ChevronDown, Check, Loader2, Bot, Cpu, Sparkles } from 'lucide-vue-next'
 import BaseSelect from '~/components/BaseSelect.vue'
 import { toast } from 'vue-sonner'
-import { aiConfigAPI, agentConfigAPI, skillsAPI } from '~/composables/useApi'
+import { aiConfigAPI, agentConfigAPI, skillsAPI, voicesAPI } from '~/composables/useApi'
 import brandLogo from '~/assets/huobao-logo.png'
 
 const showBrandImage = ref(true)
@@ -427,7 +434,7 @@ const cfgEditId = ref(null)
 const presetDialog = ref(false)
 const cfgTesting = ref(false)
 const cfgTestResult = ref(null)
-const cfgForm = reactive({ name: '', provider: '', api_key: '', base_url: '', modelStr: '', service_type: 'text', priority: 0 })
+const cfgForm = reactive({ name: '', provider: '', api_key: '', base_url: '', modelStr: '', service_type: 'text', priority: 0, volcengineTtsAppId: '' })
 const huobaoForm = reactive({ aliApiKey: '', volcengineApiKey: '', audioApiKey: '' })
 const serviceTypes = [{ type: 'text', label: '文本' }, { type: 'image', label: '图片' }, { type: 'video', label: '视频' }, { type: 'audio', label: '音频' }]
 const providers = ['ali', 'chatfire', 'gemini', 'minimax', 'openai', 'openrouter', 'vidu', 'volcengine']
@@ -456,14 +463,25 @@ const providerPresets = {
     ali: { label: '阿里推荐', baseUrl: 'https://dashscope.aliyuncs.com', models: ['wan2.6-i2v-flash'] },
   },
   audio: {
-    minimax: { label: '火宝音频', baseUrl: 'https://api.chatfire.site/minimax', models: ['speech-2.8-hd'] },
+    ali: {
+      label: '百炼 CosyVoice',
+      baseUrl: 'https://dashscope.aliyuncs.com',
+      models: ['cosyvoice-v3-flash', 'cosyvoice-v3-plus', 'cosyvoice-v3.5-flash', 'qwen3-tts-flash', 'MiniMax/speech-2.8-hd'],
+    },
+    volcengine: {
+      label: '豆包语音',
+      baseUrl: 'https://openspeech.bytedance.com',
+      models: ['doubao-tts-bigmodel'],
+    },
+    minimax: { label: 'MiniMax', baseUrl: 'https://api.chatfire.site/minimax', models: ['speech-2.8-hd'] },
   },
 }
 const huobaoPresetCards = [
   { serviceType: 'text', label: '文本', provider: 'ali', baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1', model: 'qwen3.6-plus-2026-04-02', priority: 100 },
   { serviceType: 'image', label: '图片', provider: 'volcengine', baseUrl: 'https://ark.cn-beijing.volces.com', model: 'doubao-seedream-5-0-lite-260128', priority: 99 },
   { serviceType: 'video', label: '视频', provider: 'volcengine', baseUrl: 'https://ark.cn-beijing.volces.com', model: 'doubao-seedance-2-0-fast-260128', priority: 98 },
-  { serviceType: 'audio', label: '音频', provider: 'minimax', baseUrl: 'https://api.chatfire.site/minimax', model: 'speech-2.8-hd', priority: 97 },
+  { serviceType: 'audio', label: '音频(百炼)', provider: 'ali', baseUrl: 'https://dashscope.aliyuncs.com', model: 'cosyvoice-v3-flash', priority: 97 },
+  { serviceType: 'audio', label: '音频(MiniMax)', provider: 'minimax', baseUrl: 'https://api.chatfire.site/minimax', model: 'speech-2.8-hd', priority: 96 },
 ]
 const endpointPrefixes = {
   chatfire: '/v1',
@@ -503,10 +521,28 @@ function applyProviderPreset(type, provider) {
 async function loadCfgs() { try { cfgs.value = await aiConfigAPI.list() } catch (e) { toast.error(e.message) } }
 async function toggleCfg(c) { await aiConfigAPI.update(c.id, { is_active: !c.is_active }); loadCfgs() }
 async function delCfg(id) { await aiConfigAPI.del(id); toast.success('已删除'); loadCfgs() }
+function buildCfgSettingsPayload() {
+  if (cfgForm.service_type === 'audio' && cfgForm.provider === 'volcengine' && cfgForm.volcengineTtsAppId.trim()) {
+    return { app_id: cfgForm.volcengineTtsAppId.trim(), cluster: 'volcano_tts' }
+  }
+  return undefined
+}
+
+async function syncBuiltinVoices() {
+  const active = byType('audio').find(c => c.is_active)
+  const provider = active?.provider || 'ali'
+  try {
+    const res = await voicesAPI.sync(provider)
+    toast.success(res?.message || `已同步 ${res?.count || 0} 个音色`)
+  } catch (e) {
+    toast.error(e.message)
+  }
+}
+
 function startAddCfg(t) {
   cfgEditId.value = null
   cfgTestResult.value = null
-  Object.assign(cfgForm, { name: '', provider: '', api_key: '', base_url: '', modelStr: '', service_type: t, priority: 0 })
+  Object.assign(cfgForm, { name: '', provider: '', api_key: '', base_url: '', modelStr: '', service_type: t, priority: 0, volcengineTtsAppId: '' })
   const firstPreset = presetsByType(t)[0]
   if (firstPreset) applyProviderPreset(t, firstPreset.provider)
   cfgDialog.value = true
@@ -514,6 +550,11 @@ function startAddCfg(t) {
 function startEditCfg(c) {
   cfgEditId.value = c.id
   cfgTestResult.value = null
+  let volcengineTtsAppId = ''
+  try {
+    const settings = typeof c.settings === 'string' ? JSON.parse(c.settings) : c.settings
+    volcengineTtsAppId = settings?.app_id || ''
+  } catch {}
   Object.assign(cfgForm, {
     name: c.name || '',
     provider: c.provider,
@@ -522,6 +563,7 @@ function startEditCfg(c) {
     modelStr: fmtModel(c.model),
     service_type: c.service_type,
     priority: c.priority ?? 0,
+    volcengineTtsAppId,
   })
   cfgDialog.value = true
 }
@@ -559,9 +601,19 @@ async function testExistingCfg(c) {
 async function saveCfg() {
   if (!cfgForm.provider) { toast.warning('选择服务商'); return }
   const models = cfgForm.modelStr.split(',').map(s => s.trim()).filter(Boolean)
+  const settings = buildCfgSettingsPayload()
+  const payload = {
+    name: cfgForm.name,
+    provider: cfgForm.provider,
+    api_key: cfgForm.api_key,
+    base_url: cfgForm.base_url,
+    model: models,
+    priority: cfgForm.priority,
+    settings,
+  }
   try {
-    if (cfgEditId.value) await aiConfigAPI.update(cfgEditId.value, { name: cfgForm.name, provider: cfgForm.provider, api_key: cfgForm.api_key, base_url: cfgForm.base_url, model: models, priority: cfgForm.priority })
-    else await aiConfigAPI.create({ service_type: cfgForm.service_type, provider: cfgForm.provider, name: cfgForm.name || `${cfgForm.provider}-${cfgForm.service_type}`, api_key: cfgForm.api_key, base_url: cfgForm.base_url, model: models, priority: cfgForm.priority })
+    if (cfgEditId.value) await aiConfigAPI.update(cfgEditId.value, payload)
+    else await aiConfigAPI.create({ service_type: cfgForm.service_type, ...payload, name: cfgForm.name || `${cfgForm.provider}-${cfgForm.service_type}` })
     cfgDialog.value = false; toast.success('已保存'); loadCfgs()
   } catch (e) { toast.error(e.message) }
 }

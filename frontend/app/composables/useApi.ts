@@ -166,5 +166,5 @@ export const skillsAPI = {
 
 export const voicesAPI = {
   list: (provider?: string) => api.get(`/ai-voices${provider ? `?provider=${provider}` : ''}`),
-  sync: () => api.post('/ai-voices/sync', {}),
+  sync: (provider?: string) => api.post('/ai-voices/sync', provider ? { provider } : {}),
 }

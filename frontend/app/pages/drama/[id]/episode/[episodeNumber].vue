@@ -2766,9 +2766,15 @@ async function genVid(sb) {
   const first = getFirstFrame(sb)
   const last = getLastFrame(sb)
   const refs = getRefs(sb)
-  if (first && last) { Object.assign(params, { reference_mode: 'first_last', first_frame_url: first, last_frame_url: last }) }
-  else if (refs.length) { Object.assign(params, { reference_mode: 'multiple', reference_image_urls: [first, ...refs].filter(Boolean) }) }
-  else if (first) { Object.assign(params, { reference_mode: 'single', image_url: first }) }
+  // Seedance：首尾帧模式与 reference_image 不能混用；有参考图时统一走多参考
+  if (first && last) {
+    Object.assign(params, { reference_mode: 'first_last', first_frame_url: first, last_frame_url: last })
+  } else if (refs.length) {
+    const referenceImageUrls = [...new Set([first, ...refs].filter(Boolean))]
+    Object.assign(params, { reference_mode: 'multiple', reference_image_urls: referenceImageUrls })
+  } else if (first) {
+    Object.assign(params, { reference_mode: 'single', image_url: first })
+  }
   try {
     delete failedVideoMessages.value[sb.id]
     if (!isPendingVideo(sb.id)) pendingVideoIds.value.push(sb.id)

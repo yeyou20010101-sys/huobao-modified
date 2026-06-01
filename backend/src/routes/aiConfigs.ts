@@ -38,11 +38,20 @@ const HUOBAO_PRESET_SERVICES = [
   },
   {
     serviceType: 'audio',
-    label: '音频',
+    label: '音频(百炼)',
+    provider: 'ali',
+    baseUrl: 'https://dashscope.aliyuncs.com',
+    model: 'cosyvoice-v3-flash',
+    priority: 97,
+    apiKeySource: 'ali' as const,
+  },
+  {
+    serviceType: 'audio',
+    label: '音频(MiniMax)',
     provider: 'minimax',
     baseUrl: 'https://api.chatfire.site/minimax',
     model: 'speech-2.8-hd',
-    priority: 97,
+    priority: 96,
     apiKeySource: 'optional' as const,
   },
 ] as const
@@ -123,6 +132,18 @@ function buildProbe(serviceType: string, provider: string, baseUrl: string, mode
         body: undefined,
       }
     }
+    if (serviceType === 'audio') {
+      const root = baseUrl.replace(/\/compatible-mode\/v1$/, '').replace(/\/$/, '') || 'https://dashscope.aliyuncs.com'
+      return {
+        method: 'POST',
+        url: joinProviderUrl(root, '/api/v1', '/services/audio/tts/SpeechSynthesizer'),
+        headers: bearerHeaders(apiKey, true),
+        body: {
+          model: m || 'cosyvoice-v3-flash',
+          input: { text: '连接测试', voice: 'longanyang', format: 'mp3', sample_rate: 24000 },
+        },
+      }
+    }
     return {
       method: 'POST',
       url: joinProviderUrl(baseUrl, '/api/v1', serviceType === 'video'
@@ -134,6 +155,19 @@ function buildProbe(serviceType: string, provider: string, baseUrl: string, mode
   }
 
   if (p === 'volcengine') {
+    if (serviceType === 'audio') {
+      return {
+        method: 'POST',
+        url: 'https://openspeech.bytedance.com/api/v1/tts',
+        headers: bearerHeaders(apiKey, true),
+        body: {
+          app: { appid: 'probe', token: apiKey || '', cluster: 'volcano_tts' },
+          user: { uid: 'probe' },
+          audio: { voice_type: 'zh_female_shuangkuaisisi_moon_bigtts', encoding: 'mp3', speed_ratio: 1 },
+          request: { reqid: 'probe', text: '连接测试', operation: 'query' },
+        },
+      }
+    }
     const path = serviceType === 'video'
       ? '/contents/generations/tasks'
       : '/images/generations'
@@ -206,6 +240,7 @@ app.post('/', async (c) => {
     baseUrl: body.base_url || '',
     apiKey: body.api_key || '',
     model: JSON.stringify(body.model || []),
+    settings: body.settings ? JSON.stringify(body.settings) : null,
     priority: body.priority || 0,
     isActive: true,
     createdAt: ts,
@@ -402,6 +437,7 @@ app.put('/:id', async (c) => {
   if ('model' in body) updates.model = JSON.stringify(body.model)
   if ('priority' in body) updates.priority = body.priority
   if ('is_active' in body) updates.isActive = body.is_active
+  if ('settings' in body) updates.settings = body.settings ? JSON.stringify(body.settings) : null
 
   db.update(schema.aiServiceConfigs).set(updates).where(eq(schema.aiServiceConfigs.id, id)).run()
   return success(c)

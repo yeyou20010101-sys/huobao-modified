@@ -1,15 +1,33 @@
 /**
  * AI 音色管理
  * GET  /api/v1/ai-voices       - 获取音色列表
- * POST /api/v1/ai-voices/sync  - 从 MiniMax 同步音色
+ * POST /api/v1/ai-voices/sync  - 从服务商同步音色
  */
 import { Hono } from 'hono'
 import { eq } from 'drizzle-orm'
 import { db, schema } from '../db/index.js'
 import { success, badRequest, now } from '../utils/response.js'
 import { joinProviderUrl } from '../services/adapters/url.js'
+import { ALI_TTS_VOICES, VOLCENGINE_TTS_VOICES } from '../constants/tts-voices.js'
 
 const app = new Hono()
+
+function insertBuiltinVoices(provider: string, voices: typeof ALI_TTS_VOICES) {
+  const ts = now()
+  db.delete(schema.aiVoices).where(eq(schema.aiVoices.provider, provider)).run()
+  const insertRows = voices.map((v) => ({
+    voiceId: v.voiceId,
+    voiceName: v.voiceName,
+    description: JSON.stringify(v.description || []),
+    language: v.language,
+    provider,
+    createdAt: ts,
+  }))
+  if (insertRows.length > 0) {
+    db.insert(schema.aiVoices).values(insertRows).run()
+  }
+  return insertRows.length
+}
 
 // GET /ai-voices?provider=minimax
 app.get('/', async (c) => {
@@ -29,9 +47,25 @@ app.get('/', async (c) => {
   return success(c, parsed)
 })
 
-// POST /ai-voices/sync
+// POST /ai-voices/sync  body: { provider?: string }
 app.post('/sync', async (c) => {
-  // 从数据库获取 minimax 的音频配置
+  const body = await c.req.json().catch(() => ({}))
+  const provider = String(body?.provider || 'minimax').toLowerCase()
+
+  if (provider === 'ali') {
+    const count = insertBuiltinVoices('ali', ALI_TTS_VOICES)
+    return success(c, { count, provider, message: `已导入 ${count} 个百炼内置音色` })
+  }
+
+  if (provider === 'volcengine') {
+    const count = insertBuiltinVoices('volcengine', VOLCENGINE_TTS_VOICES)
+    return success(c, { count, provider, message: `已导入 ${count} 个豆包语音内置音色` })
+  }
+
+  if (provider !== 'minimax') {
+    return badRequest(c, `暂不支持从 ${provider} 拉取音色列表，请使用 sync 并指定 minimax / ali / volcengine`)
+  }
+
   const rows = db.select().from(schema.aiServiceConfigs)
     .where(eq(schema.aiServiceConfigs.serviceType, 'audio'))
     .all()
@@ -46,11 +80,10 @@ app.post('/sync', async (c) => {
     return badRequest(c, 'MiniMax API key not configured')
   }
 
-  // 调用 MiniMax get_voice API
   const resp = await fetch(joinProviderUrl(config.baseUrl, '/v1', '/get_voice'), {
     method: 'POST',
     headers: {
-      'Authorization': `Bearer ${config.apiKey}`,
+      Authorization: `Bearer ${config.apiKey}`,
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({ voice_type: 'all' }),
@@ -68,10 +101,8 @@ app.post('/sync', async (c) => {
   const voices = (result.system_voice || []).filter((v: any) => shouldKeepVoice(v))
   const ts = now()
 
-  // 先清空旧数据
   db.delete(schema.aiVoices).where(eq(schema.aiVoices.provider, 'minimax')).run()
 
-  // 批量插入新数据
   const insertRows = voices.map((v: any) => ({
     voiceId: v.voice_id,
     voiceName: v.voice_name,
@@ -85,12 +116,9 @@ app.post('/sync', async (c) => {
     db.insert(schema.aiVoices).values(insertRows).run()
   }
 
-  return success(c, { count: insertRows.length, message: `Synced ${insertRows.length} voices` })
+  return success(c, { count: insertRows.length, provider: 'minimax', message: `Synced ${insertRows.length} voices` })
 })
 
-/**
- * 从 voice_id 或 voice_name 推断语言
- */
 function extractLanguage(voiceId: string, voiceName: string): string {
   const text = `${voiceId} ${voiceName}`.toLowerCase()
   if (text.includes('cantonese') || text.includes('粤')) return '粤语'

@@ -3,7 +3,7 @@
  * API: POST /v1/t2a_v2
  * 响应: { data: { audio: "<hex>", status: 2 }, ... }
  */
-import type { TTSProviderAdapter } from './types'
+import type { TTSProviderAdapter, TTSParsedAudio } from './types.js'
 import { joinProviderUrl } from './url'
 
 export interface TTSParams {
@@ -12,15 +12,6 @@ export interface TTSParams {
   speed?: number
   model?: string
   emotion?: string
-}
-
-export interface TTSResult {
-  audioHex: string
-  audioLength: number
-  sampleRate: number
-  bitrate: number
-  format: string
-  channel: number
 }
 
 export class MiniMaxTTSAdapter implements TTSProviderAdapter {
@@ -62,7 +53,7 @@ export class MiniMaxTTSAdapter implements TTSProviderAdapter {
     return { url, method: 'POST', headers, body }
   }
 
-  parseResponse(result: any): TTSResult {
+  parseResponse(result: any): TTSParsedAudio {
     if (result.base_resp?.status_code !== 0) {
       throw new Error(result.base_resp?.status_msg || 'TTS generation failed')
     }
