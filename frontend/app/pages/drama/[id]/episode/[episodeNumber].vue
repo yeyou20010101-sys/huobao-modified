@@ -742,6 +742,7 @@
             <div class="prod-section-bar">
               <span class="dim" style="font-size:12px">{{ visualChars.length }} 个需生成形象角色</span>
               <span class="tag">{{ lockedImageConfigLabel }}</span>
+              <span v-if="dramaStyleLabel" class="tag">画风 {{ dramaStyleLabel }}</span>
               <span v-if="chars.length > visualChars.length" class="tag">旁白仅保留声音</span>
               <div class="ml-auto flex gap-1">
                 <button class="btn btn-sm" @click="batchCharImages">
@@ -784,6 +785,12 @@
                       {{ isPendingCharUpload(c.id) ? '上传中' : '上传' }}
                     </label>
                     <button class="btn btn-sm" :disabled="isCharImageBusy(c.id)" @click="genCharImg(c.id)">{{ isPendingCharImage(c.id) ? '生成中' : '生成' }}</button>
+                    <button
+                      class="btn btn-sm"
+                      :disabled="isCharImageBusy(c.id) || !(c.image_url || c.imageUrl)"
+                      :title="!(c.image_url || c.imageUrl) ? '请先上传参考图' : `按 ${dramaStyleLabel || '项目'} 画风高清重绘`"
+                      @click="refineCharImg(c)"
+                    >{{ isPendingCharRefine(c.id) ? '重绘中' : '高清重绘' }}</button>
                   </div>
                 </div>
               </div>
@@ -1513,6 +1520,7 @@ const videoConfigs = ref([])
 const audioConfigs = ref([])
 const pendingCharImageIds = ref([])
 const pendingCharUploadIds = ref([])
+const pendingCharRefineIds = ref([])
 const pendingSceneImageIds = ref([])
 const pendingShotFrameKeys = ref([])
 const pendingVideoIds = ref([])
@@ -1536,12 +1544,21 @@ function isPendingCharUpload(id) {
   return pendingCharUploadIds.value.includes(id)
 }
 
-function isCharImageBusy(id) {
-  return isPendingCharImage(id) || isPendingCharUpload(id)
+/** 角色高清重绘是否进行中 */
+function isPendingCharRefine(id) {
+  return pendingCharRefineIds.value.includes(id)
 }
+
+function isCharImageBusy(id) {
+  return isPendingCharImage(id) || isPendingCharUpload(id) || isPendingCharRefine(id)
+}
+
+/** 项目画风展示标签 */
+const dramaStyleLabel = computed(() => drama.value?.style || '')
 
 function charImageStatusLabel(c) {
   if (isPendingCharUpload(c.id)) return '上传中'
+  if (isPendingCharRefine(c.id)) return '重绘中'
   if (isPendingCharImage(c.id)) return '生成中'
   if (c.image_url || c.imageUrl) return '已有形象'
   return '待生成'
@@ -2562,6 +2579,32 @@ async function genCharImg(id) {
   } catch (e) {
     pendingCharImageIds.value = pendingCharImageIds.value.filter(item => item !== id)
     toast.error(e.message)
+  }
+}
+
+/** 基于已上传图片按项目画风高清重绘角色形象 */
+async function refineCharImg(char) {
+  const id = char.id
+  const previousImage = char.image_url || char.imageUrl || ''
+  if (!previousImage) {
+    toast.info('请先上传参考图片')
+    return
+  }
+  try {
+    if (!isPendingCharRefine(id)) pendingCharRefineIds.value.push(id)
+    await characterAPI.refineImage(id, epId.value)
+    toast.success(`${char.name} 高清重绘中`)
+    await refresh()
+    watchAsyncResult(() => {
+      const target = chars.value.find(c => c.id === id)
+      const currentImage = target?.image_url || target?.imageUrl || ''
+      const done = !!currentImage && currentImage !== previousImage
+      if (done) pendingCharRefineIds.value = pendingCharRefineIds.value.filter(item => item !== id)
+      return done
+    })
+  } catch (e) {
+    pendingCharRefineIds.value = pendingCharRefineIds.value.filter(item => item !== id)
+    toast.error(e?.message || '高清重绘失败')
   }
 }
 function batchCharImages() {

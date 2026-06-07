@@ -5,6 +5,9 @@ import { success, badRequest, now } from '../utils/response.js'
 import { generateVoiceSample } from '../services/tts-generation.js'
 import { generateImage } from '../services/image-generation.js'
 import { logTaskError, logTaskStart, logTaskSuccess } from '../utils/task-logger.js'
+import { buildCharacterRefinePrompt } from '../utils/character-refine-prompt.js'
+
+const HD_REFINE_SIZE = '1920x1080'
 
 const app = new Hono()
 
@@ -77,6 +80,42 @@ app.post('/:id/generate-image', async (c) => {
     return success(c, { image_generation_id: genId })
   } catch (err: any) {
     logTaskError('CharacterImage', 'generate', { characterId: id, error: err.message })
+    return badRequest(c, err.message)
+  }
+})
+
+// POST /characters/:id/refine-image — 基于已上传图片按项目画风高清重绘
+app.post('/:id/refine-image', async (c) => {
+  const id = Number(c.req.param('id'))
+  const body = await c.req.json()
+  const [char] = db.select().from(schema.characters).where(eq(schema.characters.id, id)).all()
+  if (!char) return badRequest(c, 'Character not found')
+  if (!body.episode_id) return badRequest(c, 'episode_id is required')
+
+  const sourceImage = char.imageUrl || char.localPath
+  if (!sourceImage) return badRequest(c, '请先上传参考图片')
+
+  const [ep] = db.select().from(schema.episodes).where(eq(schema.episodes.id, Number(body.episode_id))).all()
+  if (!ep) return badRequest(c, 'Episode not found')
+
+  const [drama] = db.select().from(schema.dramas).where(eq(schema.dramas.id, char.dramaId)).all()
+  const prompt = buildCharacterRefinePrompt(char, drama?.style)
+
+  try {
+    logTaskStart('CharacterImage', 'refine', { characterId: id, episodeId: ep.id, dramaId: char.dramaId, style: drama?.style })
+    const genId = await generateImage({
+      characterId: id,
+      dramaId: char.dramaId,
+      prompt,
+      referenceImages: [sourceImage],
+      size: HD_REFINE_SIZE,
+      frameType: 'refine',
+      configId: ep.imageConfigId ?? undefined,
+    })
+    logTaskSuccess('CharacterImage', 'refine', { characterId: id, generationId: genId })
+    return success(c, { image_generation_id: genId })
+  } catch (err: any) {
+    logTaskError('CharacterImage', 'refine', { characterId: id, error: err.message })
     return badRequest(c, err.message)
   }
 })
