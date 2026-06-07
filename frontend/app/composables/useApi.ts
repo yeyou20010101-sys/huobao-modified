@@ -104,7 +104,9 @@ export const characterAPI = {
 }
 
 export const sceneAPI = {
+  update: (id: number, data: Record<string, unknown>) => api.put(`/scenes/${id}`, data),
   generateImage: (id: number, episodeId: number) => api.post(`/scenes/${id}/generate-image`, { episode_id: episodeId }),
+  refineImage: (id: number, episodeId: number) => api.post(`/scenes/${id}/refine-image`, { episode_id: episodeId }),
 }
 
 export const imageAPI = {

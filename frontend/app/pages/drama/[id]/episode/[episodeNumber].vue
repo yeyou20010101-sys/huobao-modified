@@ -807,6 +807,7 @@
             <div class="prod-section-bar">
               <span class="dim" style="font-size:12px">{{ scenes.length }} 个场景</span>
               <span class="tag">{{ lockedImageConfigLabel }}</span>
+              <span v-if="dramaStyleLabel" class="tag">画风 {{ dramaStyleLabel }}</span>
               <div class="ml-auto flex gap-1">
                 <button class="btn btn-sm" @click="batchSceneImages">
                   <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
@@ -826,16 +827,40 @@
                   <div v-else class="asset-cover-empty">
                     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
                   </div>
-                  <span class="asset-cover-badge" :class="(s.image_url || s.imageUrl) ? 'is-ready' : (isPendingSceneImage(s.id) ? 'is-pending' : '')">{{ (s.image_url || s.imageUrl) ? '已生成' : (isPendingSceneImage(s.id) ? '生成中' : '待生成') }}</span>
+                  <span class="asset-cover-badge" :class="(s.image_url || s.imageUrl) ? 'is-ready' : (isSceneImageBusy(s.id) ? 'is-pending' : '')">{{ sceneImageStatusLabel(s) }}</span>
                 </div>
                 <div class="asset-body">
                   <div class="asset-name">{{ s.location }}</div>
                   <div class="asset-meta dim">{{ s.time || '—' }}</div>
                 </div>
-                <div class="asset-foot">
-                  <span :class="['dot', (s.image_url || s.imageUrl) && 'ok', isPendingSceneImage(s.id) && 'pending']" />
-                  <span class="dim" style="font-size:10px">{{ (s.image_url || s.imageUrl) ? '已生成' : (isPendingSceneImage(s.id) ? '生成中' : '待生成') }}</span>
-                  <button class="btn btn-sm ml-auto" :disabled="isPendingSceneImage(s.id)" @click="genSceneImg(s.id)">{{ isPendingSceneImage(s.id) ? '生成中' : '生成' }}</button>
+                <div class="asset-foot asset-foot-char">
+                  <div class="asset-foot-status">
+                    <span :class="['dot', (s.image_url || s.imageUrl) && 'ok', isSceneImageBusy(s.id) && 'pending']" />
+                    <span class="dim" style="font-size:10px">{{ sceneImageStatusLabel(s) }}</span>
+                  </div>
+                  <div class="asset-foot-row">
+                    <button class="btn btn-sm" @click="openSceneDescriptionDialog(s)">场景描述</button>
+                    <button
+                      class="btn btn-sm"
+                      :disabled="isSceneImageBusy(s.id) || !(s.image_url || s.imageUrl)"
+                      :title="!(s.image_url || s.imageUrl) ? '请先上传参考图' : `按 ${dramaStyleLabel || '项目'} 画风高清重绘`"
+                      @click="refineSceneImg(s)"
+                    >{{ isPendingSceneRefine(s.id) ? '重绘中' : '高清重绘' }}</button>
+                  </div>
+                  <div class="asset-foot-row">
+                    <input
+                      :id="`scene-upload-${s.id}`"
+                      type="file"
+                      accept="image/jpeg,image/png,image/webp,image/gif"
+                      class="asset-file-input"
+                      :disabled="isSceneImageBusy(s.id)"
+                      @change="onSceneImageUpload(s, $event)"
+                    />
+                    <label :for="`scene-upload-${s.id}`" :class="['btn btn-sm', { disabled: isSceneImageBusy(s.id) }]">
+                      {{ isPendingSceneUpload(s.id) ? '上传中' : '上传' }}
+                    </label>
+                    <button class="btn btn-sm" :disabled="isSceneImageBusy(s.id)" @click="genSceneImg(s.id)">{{ isPendingSceneImage(s.id) ? '生成中' : '生成' }}</button>
+                  </div>
                 </div>
               </div>
             </div>
@@ -1442,6 +1467,36 @@
         </button>
       </div>
 
+      <div v-if="sceneDescriptionDialog.open" class="overlay appearance-dialog-overlay" @click.self="closeSceneDescriptionDialog">
+        <div class="card appearance-dialog">
+          <div class="appearance-dialog-head">
+            <div>
+              <div class="appearance-dialog-kicker">Scene Description</div>
+              <div class="appearance-dialog-title">{{ sceneDescriptionDialog.location }} · 场景描述</div>
+              <div class="appearance-dialog-sub">用于生成与高清重绘，请与上传参考图保持一致（空间结构、光线、氛围等）。</div>
+            </div>
+            <button class="btn btn-ghost btn-icon" @click="closeSceneDescriptionDialog">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            </button>
+          </div>
+          <label class="field appearance-dialog-field">
+            <span class="field-label">场景描写（prompt）</span>
+            <textarea
+              v-model="sceneDescriptionDialog.text"
+              class="textarea appearance-dialog-textarea"
+              rows="10"
+              placeholder="地点、时间、空间结构、光线氛围、色调、关键道具等"
+            />
+          </label>
+          <div class="appearance-dialog-actions">
+            <button class="btn" type="button" @click="closeSceneDescriptionDialog">取消</button>
+            <button class="btn btn-primary" type="button" :disabled="sceneDescriptionDialog.saving" @click="saveSceneDescription">
+              {{ sceneDescriptionDialog.saving ? '保存中' : '保存' }}
+            </button>
+          </div>
+        </div>
+      </div>
+
       <div v-if="appearanceDialog.open" class="overlay appearance-dialog-overlay" @click.self="closeAppearanceDialog">
         <div class="card appearance-dialog">
           <div class="appearance-dialog-head">
@@ -1557,6 +1612,8 @@ const pendingCharImageIds = ref([])
 const pendingCharUploadIds = ref([])
 const pendingCharRefineIds = ref([])
 const pendingSceneImageIds = ref([])
+const pendingSceneUploadIds = ref([])
+const pendingSceneRefineIds = ref([])
 const pendingShotFrameKeys = ref([])
 const pendingVideoIds = ref([])
 const pendingComposeIds = ref([])
@@ -1565,6 +1622,8 @@ const failedComposeMessages = ref({})
 const imageViewer = ref({ open: false, src: '', title: '' })
 /** 角色外貌描述编辑弹窗 */
 const appearanceDialog = ref({ open: false, charId: null, name: '', text: '', saving: false })
+/** 场景描述编辑弹窗 */
+const sceneDescriptionDialog = ref({ open: false, sceneId: null, location: '', text: '', saving: false })
 
 function configLabel(config) {
   if (!config) return '未配置'
@@ -1624,6 +1683,28 @@ onBeforeUnmount(() => {
 
 function isPendingSceneImage(id) {
   return pendingSceneImageIds.value.includes(id)
+}
+
+/** 场景图片上传是否进行中 */
+function isPendingSceneUpload(id) {
+  return pendingSceneUploadIds.value.includes(id)
+}
+
+/** 场景高清重绘是否进行中 */
+function isPendingSceneRefine(id) {
+  return pendingSceneRefineIds.value.includes(id)
+}
+
+function isSceneImageBusy(id) {
+  return isPendingSceneImage(id) || isPendingSceneUpload(id) || isPendingSceneRefine(id)
+}
+
+function sceneImageStatusLabel(s) {
+  if (isPendingSceneUpload(s.id)) return '上传中'
+  if (isPendingSceneRefine(s.id)) return '重绘中'
+  if (isPendingSceneImage(s.id)) return '生成中'
+  if (s.image_url || s.imageUrl) return '已有场景'
+  return '待生成'
 }
 
 function framePendingKey(id, frameType) {
@@ -2695,6 +2776,91 @@ function batchCharImages() {
     toast.error(e.message)
   })
 }
+/** 打开场景描述编辑弹窗 */
+function openSceneDescriptionDialog(scene) {
+  sceneDescriptionDialog.value = {
+    open: true,
+    sceneId: scene.id,
+    location: scene.location || '场景',
+    text: scene.prompt || '',
+    saving: false,
+  }
+}
+
+/** 关闭场景描述弹窗 */
+function closeSceneDescriptionDialog() {
+  sceneDescriptionDialog.value = { open: false, sceneId: null, location: '', text: '', saving: false }
+}
+
+/** 保存场景描述 */
+async function saveSceneDescription() {
+  const { sceneId, text } = sceneDescriptionDialog.value
+  if (!sceneId) return
+  sceneDescriptionDialog.value.saving = true
+  try {
+    await sceneAPI.update(sceneId, { prompt: text.trim() })
+    const target = scenes.value.find(s => s.id === sceneId)
+    if (target) target.prompt = text.trim()
+    toast.success('场景描述已保存')
+    closeSceneDescriptionDialog()
+  } catch (e) {
+    toast.error(e?.message || '保存失败')
+    sceneDescriptionDialog.value.saving = false
+  }
+}
+
+/** 上传场景参考图 */
+async function onSceneImageUpload(scene, event) {
+  const input = event.target
+  const file = input?.files?.[0]
+  if (input) input.value = ''
+  if (!file) return
+
+  const id = scene.id
+  try {
+    if (!isPendingSceneUpload(id)) pendingSceneUploadIds.value.push(id)
+    const { path } = await uploadAPI.image(file)
+    await sceneAPI.update(id, { image_url: path })
+    const target = scenes.value.find(s => s.id === id)
+    if (target) {
+      target.image_url = path
+      target.imageUrl = path
+    }
+    toast.success(`${scene.location} 场景图已上传`)
+    await refresh()
+  } catch (e) {
+    toast.error(e?.message || '上传失败')
+  } finally {
+    pendingSceneUploadIds.value = pendingSceneUploadIds.value.filter(item => item !== id)
+  }
+}
+
+/** 基于已上传图片按项目画风高清重绘场景图 */
+async function refineSceneImg(scene) {
+  const id = scene.id
+  const previousImage = scene.image_url || scene.imageUrl || ''
+  if (!previousImage) {
+    toast.info('请先上传参考图片')
+    return
+  }
+  try {
+    if (!isPendingSceneRefine(id)) pendingSceneRefineIds.value.push(id)
+    await sceneAPI.refineImage(id, epId.value)
+    toast.success(`${scene.location} 高清重绘中`)
+    await refresh()
+    watchAsyncResult(() => {
+      const target = scenes.value.find(s => s.id === id)
+      const currentImage = target?.image_url || target?.imageUrl || ''
+      const done = !!currentImage && currentImage !== previousImage
+      if (done) pendingSceneRefineIds.value = pendingSceneRefineIds.value.filter(item => item !== id)
+      return done
+    })
+  } catch (e) {
+    pendingSceneRefineIds.value = pendingSceneRefineIds.value.filter(item => item !== id)
+    toast.error(e?.message || '高清重绘失败')
+  }
+}
+
 async function genSceneImg(id) {
   try {
     if (!isPendingSceneImage(id)) pendingSceneImageIds.value.push(id)
@@ -2804,12 +2970,10 @@ function getShotReferenceImages(sb) {
   for (const ref of getRefs(sb)) {
     pushRef(ref)
   }
-  // 首尾帧生成不做迭代修改：不把已有首帧/尾帧当作参考图
   return refs.filter(Boolean).slice(0, 6)
 }
 
 function buildShotImagePrompt(sb, frameType) {
-  const title = sb.title || ''
   const description = sb.image_prompt || sb.imagePrompt || sb.description || ''
   const shotType = sb.shot_type || sb.shotType || ''
   const angle = sb.angle || ''
@@ -2824,7 +2988,7 @@ function buildShotImagePrompt(sb, frameType) {
     : '生成这个镜头的结束关键帧，突出动作结束、情绪落点或结果状态'
 
   return [
-    title ? `镜头标题：${title}` : '',
+    sb.title ? `镜头标题：${sb.title}` : '',
     description ? `画面描述：${description}` : '',
     shotType ? `景别：${shotType}` : '',
     angle ? `机位：${angle}` : '',
