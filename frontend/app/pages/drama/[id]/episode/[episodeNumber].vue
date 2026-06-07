@@ -769,10 +769,21 @@
                   <div class="asset-name">{{ c.name }}</div>
                   <div class="asset-meta dim">{{ c.role || '角色' }}</div>
                 </div>
-                <div class="asset-foot">
-                  <span :class="['dot', (c.image_url || c.imageUrl) && 'ok', isCharImageBusy(c.id) && 'pending']" />
-                  <span class="dim" style="font-size:10px">{{ charImageStatusLabel(c) }}</span>
-                  <div class="asset-foot-actions ml-auto">
+                <div class="asset-foot asset-foot-char">
+                  <div class="asset-foot-status">
+                    <span :class="['dot', (c.image_url || c.imageUrl) && 'ok', isCharImageBusy(c.id) && 'pending']" />
+                    <span class="dim" style="font-size:10px">{{ charImageStatusLabel(c) }}</span>
+                  </div>
+                  <div class="asset-foot-row">
+                    <button class="btn btn-sm" @click="openAppearanceDialog(c)">外貌描述</button>
+                    <button
+                      class="btn btn-sm"
+                      :disabled="isCharImageBusy(c.id) || !(c.image_url || c.imageUrl)"
+                      :title="!(c.image_url || c.imageUrl) ? '请先上传参考图' : `按 ${dramaStyleLabel || '项目'} 画风高清重绘`"
+                      @click="refineCharImg(c)"
+                    >{{ isPendingCharRefine(c.id) ? '重绘中' : '高清重绘' }}</button>
+                  </div>
+                  <div class="asset-foot-row">
                     <input
                       :id="`char-upload-${c.id}`"
                       type="file"
@@ -785,12 +796,6 @@
                       {{ isPendingCharUpload(c.id) ? '上传中' : '上传' }}
                     </label>
                     <button class="btn btn-sm" :disabled="isCharImageBusy(c.id)" @click="genCharImg(c.id)">{{ isPendingCharImage(c.id) ? '生成中' : '生成' }}</button>
-                    <button
-                      class="btn btn-sm"
-                      :disabled="isCharImageBusy(c.id) || !(c.image_url || c.imageUrl)"
-                      :title="!(c.image_url || c.imageUrl) ? '请先上传参考图' : `按 ${dramaStyleLabel || '项目'} 画风高清重绘`"
-                      @click="refineCharImg(c)"
-                    >{{ isPendingCharRefine(c.id) ? '重绘中' : '高清重绘' }}</button>
                   </div>
                 </div>
               </div>
@@ -1437,6 +1442,36 @@
         </button>
       </div>
 
+      <div v-if="appearanceDialog.open" class="overlay appearance-dialog-overlay" @click.self="closeAppearanceDialog">
+        <div class="card appearance-dialog">
+          <div class="appearance-dialog-head">
+            <div>
+              <div class="appearance-dialog-kicker">Character Appearance</div>
+              <div class="appearance-dialog-title">{{ appearanceDialog.name }} · 外貌描述</div>
+              <div class="appearance-dialog-sub">用于生成与高清重绘，请与上传参考图保持一致（发型、发色、服装等）。</div>
+            </div>
+            <button class="btn btn-ghost btn-icon" @click="closeAppearanceDialog">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            </button>
+          </div>
+          <label class="field appearance-dialog-field">
+            <span class="field-label">外貌描写（appearance）</span>
+            <textarea
+              v-model="appearanceDialog.text"
+              class="textarea appearance-dialog-textarea"
+              rows="10"
+              placeholder="性别、年龄、体型、面部特征、发型发色、着装等"
+            />
+          </label>
+          <div class="appearance-dialog-actions">
+            <button class="btn" type="button" @click="closeAppearanceDialog">取消</button>
+            <button class="btn btn-primary" type="button" :disabled="appearanceDialog.saving" @click="saveAppearance">
+              {{ appearanceDialog.saving ? '保存中' : '保存' }}
+            </button>
+          </div>
+        </div>
+      </div>
+
       <div v-if="imageViewer.open && imageViewer.src" class="overlay image-viewer-overlay" @click.self="closeImageViewer">
         <div class="card image-viewer-dialog">
           <div class="image-viewer-head">
@@ -1528,6 +1563,8 @@ const pendingComposeIds = ref([])
 const failedVideoMessages = ref({})
 const failedComposeMessages = ref({})
 const imageViewer = ref({ open: false, src: '', title: '' })
+/** 角色外貌描述编辑弹窗 */
+const appearanceDialog = ref({ open: false, charId: null, name: '', text: '', saving: false })
 
 function configLabel(config) {
   if (!config) return '未配置'
@@ -2539,6 +2576,39 @@ function watchAsyncResult(check, attempts = 24, delay = 2500) {
   })()
 }
 
+/** 打开角色外貌描述编辑弹窗 */
+function openAppearanceDialog(char) {
+  appearanceDialog.value = {
+    open: true,
+    charId: char.id,
+    name: char.name || '角色',
+    text: char.appearance || '',
+    saving: false,
+  }
+}
+
+/** 关闭外貌描述弹窗 */
+function closeAppearanceDialog() {
+  appearanceDialog.value = { open: false, charId: null, name: '', text: '', saving: false }
+}
+
+/** 保存角色外貌描述 */
+async function saveAppearance() {
+  const { charId, text } = appearanceDialog.value
+  if (!charId) return
+  appearanceDialog.value.saving = true
+  try {
+    await characterAPI.update(charId, { appearance: text.trim() })
+    const target = chars.value.find(c => c.id === charId)
+    if (target) target.appearance = text.trim()
+    toast.success('外貌描述已保存')
+    closeAppearanceDialog()
+  } catch (e) {
+    toast.error(e?.message || '保存失败')
+    appearanceDialog.value.saving = false
+  }
+}
+
 async function onCharImageUpload(char, event) {
   const input = event.target
   const file = input?.files?.[0]
@@ -2734,10 +2804,7 @@ function getShotReferenceImages(sb) {
   for (const ref of getRefs(sb)) {
     pushRef(ref)
   }
-  const first = getFirstFrame(sb)
-  const last = getLastFrame(sb)
-  pushRef(first)
-  pushRef(last)
+  // 首尾帧生成不做迭代修改：不把已有首帧/尾帧当作参考图
   return refs.filter(Boolean).slice(0, 6)
 }
 
@@ -3765,6 +3832,23 @@ onMounted(() => { refresh(); loadConfigs(); loadVoices() })
 .asset-name { font-size: 13px; font-weight: 600; }
 .asset-meta { font-size: 11px; }
 .asset-foot { display: flex; align-items: center; gap: 4px; padding: 6px 10px; border-top: 1px solid var(--border); }
+.asset-foot-char {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+  padding: 8px 10px;
+}
+.asset-foot-status {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.asset-foot-row {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+}
 .asset-foot-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
 .asset-file-input {
   position: absolute;
@@ -3871,6 +3955,58 @@ onMounted(() => { refresh(); loadConfigs(); loadVoices() })
 }
 .prod-actions { display: flex; gap: 6px; padding: 8px 10px 10px; border-top: 1px solid rgba(27, 41, 64, 0.08); }
 .prod-actions .btn { flex: 1; justify-content: center; }
+
+/* Appearance dialog */
+.appearance-dialog-overlay {
+  z-index: 130;
+  padding: 24px;
+  background: rgba(18, 24, 34, 0.68);
+  backdrop-filter: blur(10px);
+}
+.appearance-dialog {
+  width: min(560px, calc(100vw - 32px));
+  max-height: calc(100vh - 48px);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 18px 20px;
+}
+.appearance-dialog-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+.appearance-dialog-kicker {
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+.appearance-dialog-title {
+  margin-top: 4px;
+  font-size: 16px;
+  font-weight: 600;
+  font-family: var(--font-display);
+}
+.appearance-dialog-sub {
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--text-3);
+  line-height: 1.5;
+}
+.appearance-dialog-field {
+  margin: 0;
+}
+.appearance-dialog-textarea {
+  min-height: 220px;
+  resize: vertical;
+}
+.appearance-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
 
 /* Image viewer */
 .image-viewer-overlay {
