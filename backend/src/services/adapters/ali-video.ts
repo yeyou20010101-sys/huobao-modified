@@ -20,6 +20,8 @@ export class AliVideoAdapter implements VideoProviderAdapter {
     const headers: Record<string, string> = {
       'Authorization': `Bearer ${config.apiKey}`,
       'Content-Type': 'application/json',
+      // 万相视频 HTTP 接口仅支持异步，缺此头会 403: current user api does not support synchronous calls
+      'X-DashScope-Async': 'enable',
     }
 
     const body: any = {
