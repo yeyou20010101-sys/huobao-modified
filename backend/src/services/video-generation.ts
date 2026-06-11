@@ -2,7 +2,7 @@ import { db, schema } from '../db/index.js'
 import { eq } from 'drizzle-orm'
 import { getActiveConfig, getConfigById } from './ai.js'
 import { now } from '../utils/response.js'
-import { downloadFile, readImageAsCompressedDataUrl } from '../utils/storage.js'
+import { downloadFile, readImageAsVideoReferenceDataUrl } from '../utils/storage.js'
 import { getVideoAdapter } from './adapters/registry'
 import type { AIConfig } from './adapters/types'
 import { logTaskError, logTaskPayload, logTaskProgress, logTaskStart, logTaskSuccess, logTaskWarn, redactUrl } from '../utils/task-logger.js'
@@ -22,7 +22,18 @@ interface GenerateVideoParams {
   configId?: number
 }
 
+/** Seedance 等视频模型要求至少一张参考图 */
+function assertVideoHasReferenceMedia(params: GenerateVideoParams) {
+  const hasImage = !!params.imageUrl?.trim()
+  const hasFirst = !!params.firstFrameUrl?.trim()
+  const hasLast = !!params.lastFrameUrl?.trim()
+  const hasRefs = (params.referenceImageUrls?.length ?? 0) > 0
+  if (hasImage || hasFirst || hasLast || hasRefs) return
+  throw new Error('请至少提供首帧、尾帧或参考图之一后再生成视频（当前视频模型不支持无图纯文生视频）')
+}
+
 export async function generateVideo(params: GenerateVideoParams): Promise<number> {
+  assertVideoHasReferenceMedia(params)
   const ts = now()
   const config = params.configId
     ? getConfigById(params.configId)
@@ -168,11 +179,7 @@ async function normalizeVideoReferenceUrl(value: string | null | undefined): Pro
   if (raw.startsWith('static/') || raw.startsWith('/static/')) {
     const localPath = raw.startsWith('/static/') ? raw.slice(1) : raw
     try {
-      return await readImageAsCompressedDataUrl(localPath, {
-        maxWidth: 768,
-        maxHeight: 768,
-        quality: 68,
-      })
+      return await readImageAsVideoReferenceDataUrl(localPath)
     } catch (err) {
       logTaskWarn('VideoTask', 'reference-read-failed', { path: localPath, error: (err as Error).message })
       return null
@@ -222,8 +229,13 @@ async function pollVideoTask(id: number, config: AIConfig, taskId: string, story
         return
       }
       if (pollResp.status === 'failed') {
-        logTaskError('VideoTask', 'poll-failed', { id, taskId, error: pollResp.error || 'Video generation failed' })
-        throw new Error(pollResp.error || 'Video generation failed')
+        const errMsg = pollResp.error || 'Video generation failed'
+        logTaskError('VideoTask', 'poll-failed', { id, taskId, error: errMsg })
+        db.update(schema.videoGenerations)
+          .set({ status: 'failed', errorMsg: errMsg, updatedAt: now() })
+          .where(eq(schema.videoGenerations.id, id))
+          .run()
+        return
       }
     } catch (err: any) {
       if (i === 299) {

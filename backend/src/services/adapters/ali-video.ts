@@ -1,6 +1,7 @@
 /**
  * 阿里云百炼（万相）视频生成 Adapter
  * API 文档: https://help.aliyun.com/zh/model-studio/image-to-video-api-reference
+ * wan2.7 起需使用 input.media，见 wan2.7 i2v 文档
  */
 import type { VideoProviderAdapter, VideoGenerationRecord } from './types'
 import { joinProviderUrl } from './url'
@@ -16,6 +17,7 @@ export class AliVideoAdapter implements VideoProviderAdapter {
   } {
     const baseUrl = config.baseUrl || 'https://dashscope.aliyuncs.com'
     const url = joinProviderUrl(baseUrl, '/api/v1', '/services/aigc/video-generation/video-synthesis')
+    const model = record.model || 'wan2.6-i2v-flash'
 
     const headers: Record<string, string> = {
       'Authorization': `Bearer ${config.apiKey}`,
@@ -24,23 +26,37 @@ export class AliVideoAdapter implements VideoProviderAdapter {
       'X-DashScope-Async': 'enable',
     }
 
+    const firstFrameUrl = record.imageUrl ?? record.firstFrameUrl ?? ''
+    const input: Record<string, unknown> = {
+      prompt: record.prompt,
+    }
+
+    // wan2.7+ 统一走 media 数组；旧版 wan2.6 仍用 img_url
+    if (this.isWan27Model(model)) {
+      const media: Array<{ type: string; url: string }> = []
+      if (firstFrameUrl) {
+        media.push({ type: 'first_frame', url: firstFrameUrl })
+      }
+      if (record.lastFrameUrl) {
+        media.push({ type: 'last_frame', url: record.lastFrameUrl as string })
+      }
+      input.media = media
+    } else {
+      input.img_url = firstFrameUrl
+      if (record.lastFrameUrl) {
+        input.last_img_url = record.lastFrameUrl
+      }
+    }
+
     const body: any = {
-      model: record.model || 'wan2.6-i2v-flash',
-      input: {
-        prompt: record.prompt,
-        img_url: record.imageUrl ?? record.firstFrameUrl ?? '',
-      },
+      model,
+      input,
       parameters: {
         resolution: this.normalizeResolution(record.aspectRatio ?? '16:9'),
         duration: record.duration || 5,
         watermark: false,
         seed: Math.floor(Math.random() * 2147483647),
       },
-    }
-
-    // 尾帧模式
-    if (record.lastFrameUrl) {
-      body.input.last_img_url = record.lastFrameUrl as string
     }
 
     return { url, method: 'POST', headers, body }
@@ -51,7 +67,7 @@ export class AliVideoAdapter implements VideoProviderAdapter {
     taskId?: string
     videoUrl?: string
   } {
-    if (result.output?.task_status === 'PENDING' && result.output?.task_id) {
+    if (result.output?.task_id && (result.output?.task_status === 'PENDING' || result.output?.task_status === 'RUNNING')) {
       return { isAsync: true, taskId: result.output.task_id }
     }
 
@@ -92,7 +108,10 @@ export class AliVideoAdapter implements VideoProviderAdapter {
     }
 
     if (status === 'FAILED') {
-      return { status: 'failed', error: result.message || 'Video generation failed' }
+      const code = result.output?.code
+      const message = result.output?.message || result.message
+      const error = code && message ? `${code}: ${message}` : (message || 'Video generation failed')
+      return { status: 'failed', error }
     }
 
     if (status === 'PENDING' || status === 'RUNNING') {
@@ -106,10 +125,11 @@ export class AliVideoAdapter implements VideoProviderAdapter {
     return result.output?.video_url || null
   }
 
-  private normalizeResolution(aspectRatio?: string): string {
-    const ratio = aspectRatio || '16:9'
-    if (ratio === '9:16') return '720P'
-    if (ratio === '1:1') return '720P'
+  private isWan27Model(model: string) {
+    return model.includes('wan2.7')
+  }
+
+  private normalizeResolution(_aspectRatio?: string): string {
     return '1080P'
   }
 }

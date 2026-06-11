@@ -2954,7 +2954,7 @@ function hasImg(s) { return !!getStoryboardCover(s) }
 function hasVid(s) { return !!getVideoUrl(s) }
 function hasComposed(s) { return !!getComposedVideoUrl(s) }
 
-function getShotReferenceImages(sb) {
+function getShotReferenceImages(sb, frameType) {
   const refs = []
   const pushRef = (value) => {
     if (!value || refs.includes(value) || refs.length >= 6) return
@@ -2967,8 +2967,15 @@ function getShotReferenceImages(sb) {
     const char = chars.value.find(item => item.id === charId)
     pushRef(char?.image_url || char?.imageUrl)
   }
+  if (frameType === 'last_frame') {
+    pushRef(getFirstFrame(sb))
+  }
   for (const ref of getRefs(sb)) {
+    if (frameType === 'first_frame' && ref === getLastFrame(sb)) continue
     pushRef(ref)
+  }
+  if (frameType === 'first_frame') {
+    return refs.filter((item) => item !== getLastFrame(sb)).filter(Boolean).slice(0, 6)
   }
   return refs.filter(Boolean).slice(0, 6)
 }
@@ -3004,7 +3011,7 @@ function buildShotImagePrompt(sb, frameType) {
 
 async function genShotFrame(sb, frameType) {
   const prompt = buildShotImagePrompt(sb, frameType)
-  const referenceImages = getShotReferenceImages(sb)
+  const referenceImages = getShotReferenceImages(sb, frameType)
   const key = framePendingKey(sb.id, frameType)
   try {
     if (!pendingShotFrameKeys.value.includes(key)) pendingShotFrameKeys.value.push(key)
@@ -3044,10 +3051,15 @@ async function genVid(sb) {
   if (first && last) {
     Object.assign(params, { reference_mode: 'first_last', first_frame_url: first, last_frame_url: last })
   } else if (refs.length) {
-    const referenceImageUrls = [...new Set([first, ...refs].filter(Boolean))]
+    const referenceImageUrls = [...new Set([first, last, ...refs].filter(Boolean))]
     Object.assign(params, { reference_mode: 'multiple', reference_image_urls: referenceImageUrls })
   } else if (first) {
     Object.assign(params, { reference_mode: 'single', image_url: first })
+  } else if (last) {
+    Object.assign(params, { reference_mode: 'single', image_url: last })
+  } else {
+    toast.error('请先生成首帧、尾帧或添加镜头参考图后再生成视频（Seedance 不支持无图纯文生视频）')
+    return
   }
   try {
     delete failedVideoMessages.value[sb.id]

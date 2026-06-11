@@ -92,6 +92,65 @@ export function readImageAsDataUrl(relativePath: string): string {
   return `data:${mimeType};base64,${buffer.toString('base64')}`
 }
 
+/** 图生视频参考图：1080P 以内原图直传，超出才等比压到 1080P 边界内 */
+export const VIDEO_REFERENCE_MAX_WIDTH = 1920
+export const VIDEO_REFERENCE_MAX_HEIGHT = 1920
+export const VIDEO_REFERENCE_MAX_BYTES = 5 * 1024 * 1024
+export const VIDEO_REFERENCE_JPEG_QUALITY = 90
+
+/** 图生图参考图：2K 以内原图直传，超出才等比压到 2K 边界内 */
+export const IMAGE_REFERENCE_MAX_WIDTH = 2560
+export const IMAGE_REFERENCE_MAX_HEIGHT = 2560
+export const IMAGE_REFERENCE_MAX_BYTES = 5 * 1024 * 1024
+export const IMAGE_REFERENCE_JPEG_QUALITY = 90
+
+export async function readImageAsVideoReferenceDataUrl(relativePath: string): Promise<string> {
+  const filePath = getAbsolutePath(relativePath)
+  const stat = fs.statSync(filePath)
+  const meta = await sharp(filePath).rotate().metadata()
+  const width = meta.width ?? 0
+  const height = meta.height ?? 0
+  const within1080p = width > 0
+    && height > 0
+    && width <= VIDEO_REFERENCE_MAX_WIDTH
+    && height <= VIDEO_REFERENCE_MAX_HEIGHT
+    && stat.size <= VIDEO_REFERENCE_MAX_BYTES
+
+  if (within1080p) {
+    return readImageAsDataUrl(relativePath)
+  }
+
+  return readImageAsCompressedDataUrl(relativePath, {
+    maxWidth: VIDEO_REFERENCE_MAX_WIDTH,
+    maxHeight: VIDEO_REFERENCE_MAX_HEIGHT,
+    quality: VIDEO_REFERENCE_JPEG_QUALITY,
+  })
+}
+
+/** 图生图参考图：2K 以内原图直传，超出才等比压到 2K 边界内 */
+export async function readImageAsImageReferenceDataUrl(relativePath: string): Promise<string> {
+  const filePath = getAbsolutePath(relativePath)
+  const stat = fs.statSync(filePath)
+  const meta = await sharp(filePath).rotate().metadata()
+  const width = meta.width ?? 0
+  const height = meta.height ?? 0
+  const withinLimit = width > 0
+    && height > 0
+    && width <= IMAGE_REFERENCE_MAX_WIDTH
+    && height <= IMAGE_REFERENCE_MAX_HEIGHT
+    && stat.size <= IMAGE_REFERENCE_MAX_BYTES
+
+  if (withinLimit) {
+    return readImageAsDataUrl(relativePath)
+  }
+
+  return readImageAsCompressedDataUrl(relativePath, {
+    maxWidth: IMAGE_REFERENCE_MAX_WIDTH,
+    maxHeight: IMAGE_REFERENCE_MAX_HEIGHT,
+    quality: IMAGE_REFERENCE_JPEG_QUALITY,
+  })
+}
+
 export async function readImageAsCompressedDataUrl(
   relativePath: string,
   options: {

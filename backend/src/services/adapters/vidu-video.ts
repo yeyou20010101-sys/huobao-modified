@@ -43,12 +43,7 @@ export class ViduVideoAdapter implements VideoProviderAdapter {
     if (record.duration) body.duration = record.duration
     if (record.aspectRatio) {
       // Vidu 使用 resolution 参数而非 aspect ratio
-      const ratioMap: Record<string, string> = {
-        '16:9': '720p',
-        '9:16': '720p',
-        '1:1': '720p',
-      }
-      body.resolution = ratioMap[record.aspectRatio] || '720p'
+      body.resolution = '1080p'
     }
 
     return {

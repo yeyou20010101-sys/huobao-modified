@@ -12,7 +12,7 @@ type SceneRow = typeof schema.scenes.$inferSelect
 export type ShotReferenceAsset = {
   path: string
   label: string
-  kind: 'scene' | 'character' | 'extra'
+  kind: 'scene' | 'character' | 'extra' | 'first_frame_ref'
   imageLabel: string
 }
 
@@ -48,11 +48,12 @@ function parseStoryboardExtraRefs(raw: string | null | undefined) {
   }
 }
 
-/** 场景软参考 + 本镜出场角色（最多 2 张） */
+/** 场景软参考 + 本镜出场角色（最多 2 张）；尾帧可附加首帧，首帧不引用尾帧 */
 export function buildShotReferenceAssets(
   sb: StoryboardRow,
   scene: SceneRow | null | undefined,
   characters: CharacterRow[],
+  frameType?: string,
 ): ShotReferenceAsset[] {
   const assets: ShotReferenceAsset[] = []
   const seen = new Set<string>()
@@ -73,8 +74,17 @@ export function buildShotReferenceAssets(
     pushAsset(char.imageUrl || char.localPath, `${char.name}角色外貌`, 'character')
   }
 
+  if (frameType === 'last_frame') {
+    pushAsset(sb.firstFrameImage, '本镜头首帧', 'first_frame_ref')
+  }
+
   for (const ref of parseStoryboardExtraRefs(sb.referenceImages)) {
+    if (frameType === 'first_frame' && ref === sb.lastFrameImage) continue
     pushAsset(ref, '镜头参考图', 'extra')
+  }
+
+  if (frameType === 'first_frame') {
+    return assets.filter((asset) => asset.path !== sb.lastFrameImage)
   }
 
   return assets
@@ -96,6 +106,9 @@ function buildReferenceLegend(assets: ShotReferenceAsset[]) {
     }
     if (asset.kind === 'character') {
       return `${asset.imageLabel}=${asset.label}（仅约束五官、发型、服装配色，不约束姿态与背景）`
+    }
+    if (asset.kind === 'first_frame_ref') {
+      return `${asset.imageLabel}=${asset.label}（软参考：空间色调与顶光方向连续；须按尾帧描述重绘构图与汇聚结果，禁止直接复制首帧画面）`
     }
     return `${asset.imageLabel}=${asset.label}`
   }).join('；')
@@ -145,7 +158,6 @@ export function buildShotFramePrompt(
       : '本镜无人物，纯环境画面'
 
   return [
-    '【整帧重绘】生成完整单帧画面，不是在原图上贴人物或换背景',
     `画风：${styleLabel}`,
     buildSceneContext(sb, scene),
     assets.length ? `参考图映射：${buildReferenceLegend(assets)}` : '无参考图，按画面描述绘制',
@@ -188,7 +200,7 @@ export function resolveShotFrameGeneration(storyboardId: number, frameType: stri
     ? db.select().from(schema.dramas).where(eq(schema.dramas.id, resolvedDramaId)).all()
     : []
 
-  const assets = buildShotReferenceAssets(sb, scene, characters)
+  const assets = buildShotReferenceAssets(sb, scene, characters, frameType)
   const prompt = buildShotFramePrompt(sb, frameType, assets, characters, drama?.style, scene)
 
   return {

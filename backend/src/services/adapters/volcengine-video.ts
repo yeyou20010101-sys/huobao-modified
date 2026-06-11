@@ -27,7 +27,7 @@ export class VolcEngineVideoAdapter implements VideoProviderAdapter {
   }
 
   buildGenerateRequest(config: AIConfig, record: VideoGenerationRecord): ProviderRequest {
-    const model = record.model || config.model || 'doubao-seedance-2-0-fast-260128'
+    const model = record.model || config.model || 'doubao-seedance-2-0-260128'
 
     const content: any[] = [{ type: 'text', text: record.prompt || '' }]
 
@@ -51,11 +51,14 @@ export class VolcEngineVideoAdapter implements VideoProviderAdapter {
       } catch {}
     }
 
+    const { model: resolvedModel, resolution } = this.resolveModelAndResolution(model)
+
     const body: any = {
-      model,
+      model: resolvedModel,
       content,
       generate_audio: true,
       ratio: record.aspectRatio || 'adaptive',
+      resolution,
       duration: this.normalizeDuration(record.duration),
       watermark: false,
     }
@@ -117,5 +120,14 @@ export class VolcEngineVideoAdapter implements VideoProviderAdapter {
     const parsed = Math.round(Number(duration || 5))
     if (!Number.isFinite(parsed)) return 5
     return Math.min(12, Math.max(4, parsed))
+  }
+
+  /** fast 模型不支持 1080p，自动切到同系列标准模型 */
+  private resolveModelAndResolution(model: string): { model: string; resolution: string } {
+    if (model.includes('fast')) {
+      const standard = model.replace('-fast-', '-').replace('-fast', '')
+      return { model: standard, resolution: '1080p' }
+    }
+    return { model, resolution: '1080p' }
   }
 }

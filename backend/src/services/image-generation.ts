@@ -2,7 +2,7 @@ import { db, schema } from '../db/index.js'
 import { eq } from 'drizzle-orm'
 import { getActiveConfig, getConfigById } from './ai.js'
 import { now } from '../utils/response.js'
-import { downloadFile, readImageAsCompressedDataUrl, saveBase64Image } from '../utils/storage.js'
+import { downloadFile, readImageAsImageReferenceDataUrl, saveBase64Image } from '../utils/storage.js'
 import { getImageAdapter } from './adapters/registry'
 import type { AIConfig } from './adapters/types'
 import { logTaskError, logTaskPayload, logTaskProgress, logTaskStart, logTaskSuccess, logTaskWarn, redactUrl } from '../utils/task-logger.js'
@@ -183,11 +183,7 @@ async function normalizeReferenceImages(raw: string | null | undefined): Promise
     if (value.startsWith('static/') || value.startsWith('/static/')) {
       const localPath = value.startsWith('/static/') ? value.slice(1) : value
       try {
-        return await readImageAsCompressedDataUrl(localPath, {
-          maxWidth: 768,
-          maxHeight: 768,
-          quality: 68,
-        })
+        return await readImageAsImageReferenceDataUrl(localPath)
       } catch (err) {
         logTaskWarn('ImageTask', 'reference-read-failed', { path: localPath, error: (err as Error).message })
         return null
