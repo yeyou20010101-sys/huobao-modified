@@ -3013,6 +3013,7 @@ async function genShotFrame(sb, frameType) {
   const prompt = buildShotImagePrompt(sb, frameType)
   const referenceImages = getShotReferenceImages(sb, frameType)
   const key = framePendingKey(sb.id, frameType)
+  const previousImage = frameType === 'first_frame' ? getFirstFrame(sb) : getLastFrame(sb)
   try {
     if (!pendingShotFrameKeys.value.includes(key)) pendingShotFrameKeys.value.push(key)
     const body = {
@@ -3027,10 +3028,11 @@ async function genShotFrame(sb, frameType) {
     await refresh()
     watchAsyncResult(() => {
       const target = sbs.value.find(s => s.id === sb.id)
-      const done = frameType === 'first_frame' ? !!getFirstFrame(target) : !!getLastFrame(target)
+      const currentImage = frameType === 'first_frame' ? getFirstFrame(target) : getLastFrame(target)
+      const done = !!currentImage && (!previousImage || currentImage !== previousImage)
       if (done) pendingShotFrameKeys.value = pendingShotFrameKeys.value.filter(item => item !== key)
       return done
-    })
+    }, 60, 5000)
   } catch (e) {
     pendingShotFrameKeys.value = pendingShotFrameKeys.value.filter(item => item !== key)
     toast.error(e.message)
