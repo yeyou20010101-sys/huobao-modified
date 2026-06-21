@@ -1243,7 +1243,9 @@
             <div class="prod-section-bar">
               <span class="dim" style="font-size:12px">{{ sbs.length }} 个镜头</span>
               <span class="tag mono">{{ shotVidCount }}/{{ sbs.length }} 已生成</span>
+              <span class="tag">{{ lockedVideoConfigLabel }}</span>
               <div class="ml-auto flex gap-1">
+                <BaseSelect v-model="videoMode" :options="videoModeOptions" placeholder="视频模式" searchable style="width:112px" />
                 <button class="btn btn-sm" @click="batchVideos">
                   <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg>
                   批量视频
@@ -1261,6 +1263,17 @@
                     preload="metadata"
                     playsinline
                   />
+                  <div v-else-if="videoMode === 'multi_ref' && getVideoReferencePreview(sb).length" class="video-ref-strip">
+                    <div
+                      v-for="(item, ri) in getVideoReferencePreview(sb)"
+                      :key="`${sb.id}-ref-${ri}`"
+                      class="video-ref-thumb"
+                      @click.stop="openImageViewer('/' + item.url, item.label)"
+                    >
+                      <img :src="'/' + item.url" class="previewable-image" :alt="item.label" />
+                      <span class="video-ref-label">{{ item.imageLabel }}</span>
+                    </div>
+                  </div>
                   <img
                     v-else-if="hasImg(sb)"
                     :src="'/' + getStoryboardCover(sb)"
@@ -1277,15 +1290,25 @@
                   <div class="prod-desc truncate">{{ sb.description || sb.title || '—' }}</div>
                   <div class="prod-meta-line">{{ sb.shot_type || sb.shotType || '未设景别' }} · {{ sb.duration || 10 }}s</div>
                   <div class="prod-dots">
-                    <span :class="['dot', hasImg(sb) && 'ok']" /><span style="font-size:10px">图</span>
+                    <template v-if="videoMode === 'multi_ref'">
+                      <span :class="['dot', hasVideoReferenceReady(sb) && 'ok']" /><span style="font-size:10px">参考 {{ getVideoReferencePreview(sb).length }}</span>
+                    </template>
+                    <template v-else>
+                      <span :class="['dot', hasImg(sb) && 'ok']" /><span style="font-size:10px">图</span>
+                    </template>
                     <span :class="['dot', hasVid(sb) && 'ok', isPendingVideo(sb.id) && 'pending']" /><span style="font-size:10px">{{ isPendingVideo(sb.id) ? '视频生成中' : '视频' }}</span>
                   </div>
                   <div v-if="videoFailMessage(sb.id)" class="prod-error">{{ videoFailMessage(sb.id) }}</div>
                 </div>
                 <div class="prod-actions">
-                  <button class="btn btn-sm" :disabled="isPendingVideo(sb.id)" @click="genVid(sb)">
+                  <button
+                    class="btn btn-sm"
+                    :disabled="isPendingVideo(sb.id) || !canGenVideo(sb)"
+                    :title="videoGenDisabledReason(sb)"
+                    @click="genVid(sb)"
+                  >
                     <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg>
-                    {{ isPendingVideo(sb.id) ? '生成中' : '生成视频' }}
+                    {{ videoGenButtonLabel(sb) }}
                   </button>
                 </div>
               </div>
@@ -1582,6 +1605,7 @@ const prodTabIdx = computed({
   set: (v) => { prodTab.value = prodTabDefs.value[v]?.id || 'chars' },
 })
 const frameMode = ref('first')
+const videoMode = ref('auto')
 const fallbackVoiceProfiles = [
   { id: 'alloy', label: 'Alloy', gender: '中性', traits: '平衡、自然、克制', suitable: '通用叙述、旁白、需要稳定输出的角色' },
   { id: 'echo', label: 'Echo', gender: '男声', traits: '低沉、稳重、冷静', suitable: '成熟男性、父辈、旁白、压迫感角色' },
@@ -1599,6 +1623,12 @@ const videoConfigSelectOptions = computed(() => videoConfigs.value.map(c => {
   return { label, value: c.id }
 }))
 const frameModeOptions = [{ label: '仅首帧', value: 'first' }, { label: '首尾帧', value: 'first_last' }]
+const videoModeOptions = [
+  { label: '自动', value: 'auto' },
+  { label: '首尾帧', value: 'first_last' },
+  { label: '仅首帧', value: 'single' },
+  { label: '多参考图', value: 'multi_ref' },
+]
 const gridLayoutOptions = [
   { label: '2x2', value: '2x2' },
   { label: '3x3', value: '3x3' },
@@ -3039,35 +3069,126 @@ async function genShotFrame(sb, frameType) {
   }
 }
 
-async function genVid(sb) {
+function getRefs(sb) {
+  const raw = sb.reference_images || sb.referenceImages
+  if (!raw) return []
+  try { return JSON.parse(raw) } catch { return [] }
+}
+
+/** 多参考视频：场景 → 绑定角色 → 手动参考，与后端顺序一致 */
+function getVideoReferencePreview(sb) {
+  const items = []
+  const seen = new Set()
+  const pushItem = (url, label, kind) => {
+    if (!url || seen.has(url) || items.length >= 6) return
+    seen.add(url)
+    items.push({ url, label, kind, imageLabel: `图${items.length + 1}` })
+  }
+  const sceneId = sb?.scene_id || sb?.sceneId
+  const scene = scenes.value.find(item => item.id === sceneId)
+  if (scene) {
+    pushItem(scene.image_url || scene.imageUrl, `${scene.location || sb.location || '场景'}氛围`, 'scene')
+  }
+  for (const charId of getStoryboardCharacterIds(sb)) {
+    const char = chars.value.find(item => item.id === charId)
+    if (char) pushItem(char.image_url || char.imageUrl, `${char.name}角色`, 'character')
+  }
+  for (const ref of getRefs(sb)) {
+    pushItem(ref, '镜头参考', 'extra')
+  }
+  return items
+}
+
+function hasVideoReferenceReady(sb) {
+  return getVideoReferencePreview(sb).length > 0
+}
+
+/** 解析当前镜头实际使用的视频生成模式 */
+function resolveVideoGenMode(sb) {
+  if (videoMode.value === 'multi_ref') return 'multi_ref'
+  if (videoMode.value === 'first_last') return 'first_last'
+  if (videoMode.value === 'single') return 'single'
+  const first = getFirstFrame(sb)
+  const last = getLastFrame(sb)
+  if (first && last) return 'first_last'
+  if (first || last) return 'single'
+  if (hasVideoReferenceReady(sb)) return 'multi_ref'
+  return null
+}
+
+function canGenVideo(sb) {
+  const mode = resolveVideoGenMode(sb)
+  if (!mode) return false
+  if (mode === 'multi_ref') return hasVideoReferenceReady(sb)
+  if (mode === 'first_last') return !!(getFirstFrame(sb) && getLastFrame(sb))
+  if (mode === 'single') return !!(getFirstFrame(sb) || getLastFrame(sb))
+  return false
+}
+
+function videoGenDisabledReason(sb) {
+  if (isPendingVideo(sb.id)) return '视频生成中'
+  const mode = resolveVideoGenMode(sb)
+  if (mode === 'multi_ref' && !hasVideoReferenceReady(sb)) {
+    return '请为绑定场景/角色上传立绘，或添加镜头参考图'
+  }
+  if (mode === 'first_last' && !(getFirstFrame(sb) && getLastFrame(sb))) {
+    return '请先生成首帧和尾帧'
+  }
+  if (mode === 'single' && !(getFirstFrame(sb) || getLastFrame(sb))) {
+    return '请先生成首帧或尾帧'
+  }
+  if (!mode) return '请先生成首帧、尾帧或准备参考图'
+  return ''
+}
+
+function videoGenButtonLabel(sb) {
+  if (isPendingVideo(sb.id)) return '生成中'
+  if (resolveVideoGenMode(sb) === 'multi_ref') return '多参考生成'
+  return '生成视频'
+}
+
+function buildVideoGenParams(sb) {
+  const mode = resolveVideoGenMode(sb)
   const params = {
     storyboard_id: sb.id,
     drama_id: dramaId,
     prompt: sb.video_prompt || sb.videoPrompt || '',
     duration: Number(sb.duration || 5),
   }
-  const first = getFirstFrame(sb)
-  const last = getLastFrame(sb)
-  const refs = getRefs(sb)
-  // Seedance：首尾帧模式与 reference_image 不能混用；有参考图时统一走多参考
-  if (first && last) {
-    Object.assign(params, { reference_mode: 'first_last', first_frame_url: first, last_frame_url: last })
-  } else if (refs.length) {
-    const referenceImageUrls = [...new Set([first, last, ...refs].filter(Boolean))]
-    Object.assign(params, { reference_mode: 'multiple', reference_image_urls: referenceImageUrls })
-  } else if (first) {
-    Object.assign(params, { reference_mode: 'single', image_url: first })
-  } else if (last) {
-    Object.assign(params, { reference_mode: 'single', image_url: last })
-  } else {
-    toast.error('请先生成首帧、尾帧或添加镜头参考图后再生成视频（Seedance 不支持无图纯文生视频）')
-    return
+
+  if (mode === 'multi_ref') {
+    if (!hasVideoReferenceReady(sb)) {
+      throw new Error('多参考图模式需要至少一张参考图：请为绑定场景/角色上传立绘，或添加镜头参考图')
+    }
+    Object.assign(params, {
+      reference_mode: 'multiple',
+      reference_image_urls: getVideoReferencePreview(sb).map(item => item.url),
+    })
+    return params
   }
+  if (mode === 'first_last') {
+    const first = getFirstFrame(sb)
+    const last = getLastFrame(sb)
+    if (!first || !last) throw new Error('首尾帧模式需要同时存在首帧和尾帧')
+    Object.assign(params, { reference_mode: 'first_last', first_frame_url: first, last_frame_url: last })
+    return params
+  }
+  if (mode === 'single') {
+    const image = getFirstFrame(sb) || getLastFrame(sb)
+    if (!image) throw new Error('请先生成首帧或尾帧')
+    Object.assign(params, { reference_mode: 'single', image_url: image })
+    return params
+  }
+  throw new Error('请先生成首帧、尾帧或添加镜头参考图后再生成视频')
+}
+
+async function genVid(sb) {
   try {
+    const params = buildVideoGenParams(sb)
     delete failedVideoMessages.value[sb.id]
     if (!isPendingVideo(sb.id)) pendingVideoIds.value.push(sb.id)
     const generation = await videoAPI.generate(params)
-    toast.success('视频生成中')
+    toast.success(resolveVideoGenMode(sb) === 'multi_ref' ? '多参考视频生成中' : '视频生成中')
     await refresh()
     pollVideoGeneration(generation?.id, sb.id)
   } catch (e) {
@@ -3132,11 +3253,13 @@ async function doCompose(sb) {
   }
 }
 function batchVideos() {
-  const pendingIds = sbs.value.filter(s => !hasVid(s)).map(s => s.id)
+  const pendingIds = sbs.value.filter(s => !hasVid(s) && canGenVideo(s)).map(s => s.id)
+  const skipped = sbs.value.filter(s => !hasVid(s) && !canGenVideo(s)).length
   pendingIds.forEach(id => {
     const sb = sbs.value.find(item => item.id === id)
     if (sb) genVid(sb)
   })
+  if (skipped) toast.info(`${skipped} 个镜头缺少参考素材，已跳过`)
   if (pendingIds.length) {
     pendingVideoIds.value = [...new Set([...pendingVideoIds.value, ...pendingIds])]
     watchAsyncResult(() => pendingIds.every(id => {
@@ -3190,11 +3313,6 @@ async function pollComposeStatus() {
       }
     } catch {}
   }
-}
-function getRefs(sb) {
-  const raw = sb.reference_images || sb.referenceImages
-  if (!raw) return []
-  try { return JSON.parse(raw) } catch { return [] }
 }
 
 async function loadConfigs() {
@@ -4111,6 +4229,36 @@ onMounted(() => { refresh(); loadConfigs(); loadVoices() })
 .prod-card:hover { transform: translateY(-2px); box-shadow: 0 16px 30px rgba(20, 32, 54, 0.08); }
 .prod-cover { position: relative; aspect-ratio: 16/9; background: var(--bg-2); overflow: hidden; }
 .prod-cover img { width: 100%; height: 100%; object-fit: cover; }
+.video-ref-strip {
+  display: flex;
+  align-items: stretch;
+  width: 100%;
+  height: 100%;
+  gap: 2px;
+  padding: 4px;
+  box-sizing: border-box;
+}
+.video-ref-thumb {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  border-radius: 4px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  cursor: pointer;
+}
+.video-ref-thumb img { width: 100%; height: 100%; object-fit: cover; }
+.video-ref-label {
+  position: absolute;
+  left: 4px;
+  bottom: 4px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-size: 9px;
+  font-weight: 700;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.55);
+}
 .prod-video { width: 100%; height: 100%; object-fit: cover; background: #000; display: block; }
 .prod-cover-empty { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; color: var(--text-3); }
 .prod-idx {

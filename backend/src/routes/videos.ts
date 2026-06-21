@@ -4,6 +4,7 @@ import { db, schema } from '../db/index.js'
 import { success, created, badRequest } from '../utils/response.js'
 import { generateVideo } from '../services/video-generation.js'
 import { logTaskError, logTaskPayload, logTaskStart, logTaskSuccess } from '../utils/task-logger.js'
+import { resolveVideoReferenceGeneration } from '../utils/video-reference-prompt.js'
 
 const app = new Hono()
 
@@ -22,23 +23,47 @@ app.post('/', async (c) => {
       }
     }
 
+    let prompt = String(body.prompt || '')
+    let referenceMode = body.reference_mode
+    let referenceImageUrls: string[] | undefined = body.reference_image_urls
+    let imageUrl = body.image_url
+    let firstFrameUrl = body.first_frame_url
+    let lastFrameUrl = body.last_frame_url
+
+    if (body.storyboard_id && referenceMode === 'multiple') {
+      const resolved = resolveVideoReferenceGeneration(
+        Number(body.storyboard_id),
+        body.drama_id != null ? Number(body.drama_id) : undefined,
+      )
+      prompt = resolved.prompt
+      referenceImageUrls = resolved.referenceImages
+      imageUrl = undefined
+      firstFrameUrl = undefined
+      lastFrameUrl = undefined
+      logTaskPayload('VideoAPI', 'resolved video reference', {
+        storyboardId: body.storyboard_id,
+        characterNames: resolved.characterNames,
+        referenceCount: referenceImageUrls.length,
+      })
+    }
+
     logTaskStart('VideoAPI', 'generate', {
       storyboardId: body.storyboard_id,
       dramaId: body.drama_id,
-      referenceMode: body.reference_mode,
+      referenceMode,
       duration: body.duration,
     })
     logTaskPayload('VideoAPI', 'request body', body)
     const id = await generateVideo({
       storyboardId: body.storyboard_id,
       dramaId: body.drama_id,
-      prompt: body.prompt,
+      prompt,
       model: body.model,
-      referenceMode: body.reference_mode,
-      imageUrl: body.image_url,
-      firstFrameUrl: body.first_frame_url,
-      lastFrameUrl: body.last_frame_url,
-      referenceImageUrls: body.reference_image_urls,
+      referenceMode,
+      imageUrl,
+      firstFrameUrl,
+      lastFrameUrl,
+      referenceImageUrls,
       duration: body.duration,
       aspectRatio: body.aspect_ratio,
       configId,
