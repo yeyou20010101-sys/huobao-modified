@@ -3075,7 +3075,7 @@ function getRefs(sb) {
   try { return JSON.parse(raw) } catch { return [] }
 }
 
-/** 多参考视频：场景 → 绑定角色 → 手动参考，与后端顺序一致 */
+/** 多参考视频：绑定角色 → 手动参考 → 场景置后，与后端顺序一致 */
 function getVideoReferencePreview(sb) {
   const items = []
   const seen = new Set()
@@ -3084,17 +3084,17 @@ function getVideoReferencePreview(sb) {
     seen.add(url)
     items.push({ url, label, kind, imageLabel: `图${items.length + 1}` })
   }
-  const sceneId = sb?.scene_id || sb?.sceneId
-  const scene = scenes.value.find(item => item.id === sceneId)
-  if (scene) {
-    pushItem(scene.image_url || scene.imageUrl, `${scene.location || sb.location || '场景'}氛围`, 'scene')
-  }
   for (const charId of getStoryboardCharacterIds(sb)) {
     const char = chars.value.find(item => item.id === charId)
     if (char) pushItem(char.image_url || char.imageUrl, `${char.name}角色`, 'character')
   }
   for (const ref of getRefs(sb)) {
     pushItem(ref, '镜头参考', 'extra')
+  }
+  const sceneId = sb?.scene_id || sb?.sceneId
+  const scene = scenes.value.find(item => item.id === sceneId)
+  if (scene) {
+    pushItem(scene.image_url || scene.imageUrl, `${scene.location || sb.location || '场景'}氛围`, 'scene')
   }
   return items
 }
