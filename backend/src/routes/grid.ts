@@ -1,11 +1,15 @@
 import { Hono } from 'hono'
 import { eq } from 'drizzle-orm'
 import { db, schema } from '../db/index.js'
-import { success, badRequest, now } from '../utils/response.js'
+import { success, badRequest, now, notFound, taskError } from '../utils/response.js'
 import { generateImage } from '../services/image-generation.js'
 import { splitGridImage } from '../services/grid-split.js'
-import { createAgent } from '../agents/index.js'
+import { createAgent, resolveAgentBillingTarget } from '../agents/index.js'
 import { logTaskError, logTaskPayload, logTaskProgress } from '../utils/task-logger.js'
+import { requireUser } from '../middleware/auth.js'
+import { getOwnedDrama, getOwnedEpisode, getOwnedImageGeneration, getOwnedStoryboard, getWritableDrama, getWritableStoryboard, storageUserIdFromDramaId } from '../utils/ownership.js'
+import { beginTask, refundTask, settleTask } from '../services/billing.js'
+import { randomUUID } from 'crypto'
 
 const app = new Hono()
 
@@ -352,11 +356,24 @@ async function tryAgentGridPrompt(
   cols: number,
   mode: string,
   referenceLegend: string,
+  userId: number,
 ) {
-  const agent = createAgent('grid_prompt_generator', episodeId, dramaId)
+  const agent = createAgent('grid_prompt_generator', episodeId, dramaId, userId)
   if (!agent) return null
 
-  const result = await agent.generate(
+  const billingTarget = resolveAgentBillingTarget('grid_prompt_generator', userId)
+  const hold = beginTask({
+    userId,
+    taskType: 'agent',
+    provider: billingTarget.provider,
+    model: billingTarget.model,
+    dramaId,
+    episodeId,
+    idempotencyKey: `agent-grid:${randomUUID()}`,
+  })
+
+  try {
+    const result = await agent.generate(
     [{
       role: 'user',
       content: [
@@ -375,16 +392,28 @@ async function tryAgentGridPrompt(
   )
 
   const fromTools = findGridPayload(result.toolResults)
-  if (fromTools) return fromTools
+  if (fromTools) {
+    settleTask(hold.id)
+    return fromTools
+  }
 
   const fromText = findGridPayload(result.text)
-  if (fromText) return fromText
+  if (fromText) {
+    settleTask(hold.id)
+    return fromText
+  }
 
+  settleTask(hold.id)
   return null
+  } catch (err) {
+    refundTask(hold.id, err instanceof Error ? err.message : '宫格提示词 Agent 失败')
+    throw err
+  }
 }
 
 // POST /grid/prompt
 app.post('/prompt', async (c) => {
+  const user = requireUser(c)
   const body = await c.req.json()
   const {
     storyboard_ids,
@@ -397,6 +426,9 @@ app.post('/prompt', async (c) => {
 
   if (!storyboard_ids?.length) return badRequest(c, 'storyboard_ids required')
   if (!rows || !cols) return badRequest(c, 'rows and cols required')
+  if (drama_id && !getOwnedDrama(Number(drama_id), user.id)) return notFound(c)
+  if (episode_id && !getOwnedEpisode(Number(episode_id), user.id)) return notFound(c)
+  if (storyboard_ids.some((id: number) => !getOwnedStoryboard(Number(id), user.id))) return notFound(c)
 
   const storyboards = storyboard_ids.map((id: number) => {
     const [sb] = db.select().from(schema.storyboards).where(eq(schema.storyboards.id, id)).all()
@@ -430,6 +462,7 @@ app.post('/prompt', async (c) => {
       actualCols,
       mode,
       referenceLegend,
+      user.id,
     )
 
     if (agentPayload?.grid_prompt) {
@@ -481,6 +514,7 @@ app.post('/prompt', async (c) => {
 
 // POST /grid/generate
 app.post('/generate', async (c) => {
+  const user = requireUser(c)
   const body = await c.req.json()
   const {
     storyboard_ids,
@@ -493,6 +527,8 @@ app.post('/generate', async (c) => {
 
   if (!storyboard_ids?.length) return badRequest(c, 'storyboard_ids required')
   if (!rows || !cols) return badRequest(c, 'rows and cols required')
+  if (drama_id && !getWritableDrama(Number(drama_id), user.id)) return notFound(c)
+  if (storyboard_ids.some((id: number) => !getWritableStoryboard(Number(id), user.id))) return notFound(c)
 
   const storyboards = storyboard_ids.map((id: number) => {
     const [sb] = db.select().from(schema.storyboards).where(eq(schema.storyboards.id, id)).all()
@@ -504,7 +540,7 @@ app.post('/generate', async (c) => {
   // Get drama style
   let dramaStyle = ''
   if (drama_id) {
-    const [drama] = db.select().from(schema.dramas).where(eq(schema.dramas.id, drama_id)).all()
+    const drama = getOwnedDrama(Number(drama_id), user.id)
     dramaStyle = drama?.style || ''
   }
 
@@ -525,6 +561,7 @@ app.post('/generate', async (c) => {
       size,
       frameType: `grid_${mode}_${actualRows}x${actualCols}`,
       referenceImages,
+      userId: user.id,
     })
 
     logTaskProgress('GridGenerate', 'reference-images', {
@@ -544,12 +581,12 @@ app.post('/generate', async (c) => {
       reference_images: referenceImages,
     })
   } catch (err: any) {
-    return badRequest(c, err.message)
+    return taskError(c, err)
   }
 })
 
-// POST /grid/split
 app.post('/split', async (c) => {
+  const user = requireUser(c)
   const body = await c.req.json()
   const {
     image_generation_id,
@@ -562,15 +599,21 @@ app.post('/split', async (c) => {
   if (!rows || !cols) return badRequest(c, 'rows and cols required')
   if (!assignments?.length) return badRequest(c, 'assignments required')
 
-  const [imgRecord] = db.select().from(schema.imageGenerations)
-    .where(eq(schema.imageGenerations.id, image_generation_id)).all()
-
-  if (!imgRecord) return badRequest(c, 'Image generation not found')
+  const imgRecord = getOwnedImageGeneration(Number(image_generation_id), user.id)
+  if (!imgRecord) return notFound(c)
   if (imgRecord.status !== 'completed') return badRequest(c, `Image status: ${imgRecord.status}`)
   if (!imgRecord.localPath) return badRequest(c, 'No local image file')
+  if (assignments.some((item: { storyboard_id?: number }) => item.storyboard_id && !getWritableStoryboard(Number(item.storyboard_id), user.id))) {
+    return notFound(c)
+  }
 
   try {
-    const cells = await splitGridImage(imgRecord.localPath, rows, cols)
+    const cells = await splitGridImage(
+      imgRecord.localPath,
+      rows,
+      cols,
+      storageUserIdFromDramaId(imgRecord.dramaId, user.id),
+    )
 
     const results: any[] = []
     for (let i = 0; i < assignments.length && i < cells.length; i++) {
@@ -600,10 +643,10 @@ app.post('/split', async (c) => {
 
 // GET /grid/status/:id
 app.get('/status/:id', async (c) => {
+  const user = requireUser(c)
   const id = Number(c.req.param('id'))
-  const [row] = db.select().from(schema.imageGenerations)
-    .where(eq(schema.imageGenerations.id, id)).all()
-  if (!row) return badRequest(c, 'Not found')
+  const row = getOwnedImageGeneration(id, user.id)
+  if (!row) return notFound(c)
   return success(c, {
     id: row.id,
     status: row.status,

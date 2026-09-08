@@ -26,13 +26,42 @@ export class VolcEngineVideoAdapter implements VideoProviderAdapter {
     })
   }
 
+  private pushVideoContent(content: any[], url: string) {
+    content.push({
+      type: 'video_url',
+      video_url: { url },
+      role: 'reference_video',
+    })
+  }
+
+  private parseUrlList(raw: string | null | undefined): string[] {
+    if (!raw) return []
+    try {
+      return (JSON.parse(raw) as string[]).map((item) => String(item || '').trim()).filter(Boolean)
+    } catch {
+      return []
+    }
+  }
+
   buildGenerateRequest(config: AIConfig, record: VideoGenerationRecord): ProviderRequest {
     const model = record.model || config.model || 'doubao-seedance-2-0-260128'
 
     const content: any[] = [{ type: 'text', text: record.prompt || '' }]
 
     // Seedance 2.x 要求每张 image_url 必须带 role，否则会 InvalidParameter
-    if (record.referenceMode === 'single' && record.imageUrl) {
+    // multimodal：同一 content 内同时传 reference_video + reference_image
+    if (record.referenceMode === 'multimodal') {
+      for (const url of this.parseUrlList(record.referenceVideoUrls)) {
+        this.pushVideoContent(content, url)
+      }
+      for (const url of this.parseUrlList(record.referenceImageUrls)) {
+        this.pushImageContent(content, url, 'reference_image')
+      }
+    } else if (record.referenceMode === 'reference_video') {
+      for (const url of this.parseUrlList(record.referenceVideoUrls)) {
+        this.pushVideoContent(content, url)
+      }
+    } else if (record.referenceMode === 'single' && record.imageUrl) {
       this.pushImageContent(content, record.imageUrl, 'first_frame')
     } else if (record.referenceMode === 'first_last') {
       if (record.firstFrameUrl) {
@@ -43,12 +72,9 @@ export class VolcEngineVideoAdapter implements VideoProviderAdapter {
       }
     } else if (record.referenceMode === 'multiple' && record.referenceImageUrls) {
       // Seedance 禁止 first_frame/last_frame 与 reference_image 混用
-      try {
-        const urls = (JSON.parse(record.referenceImageUrls) as string[]).filter(Boolean)
-        for (const url of urls) {
-          this.pushImageContent(content, url, 'reference_image')
-        }
-      } catch {}
+      for (const url of this.parseUrlList(record.referenceImageUrls)) {
+        this.pushImageContent(content, url, 'reference_image')
+      }
     }
 
     const { model: resolvedModel, resolution } = this.resolveModelAndResolution(model)

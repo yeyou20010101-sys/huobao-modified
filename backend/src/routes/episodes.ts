@@ -3,15 +3,22 @@ import { eq } from 'drizzle-orm'
 import { db, schema } from '../db/index.js'
 import { success, notFound, badRequest, now } from '../utils/response.js'
 import { toSnakeCaseArray, toSnakeCase } from '../utils/transform.js'
+import { requireUser } from '../middleware/auth.js'
+import { assertUserOwnsConfigIds, getOwnedEpisode, getWritableDrama, getWritableEpisode } from '../utils/ownership.js'
 
 const app = new Hono()
 
 // POST /episodes — Create a new episode
 app.post('/', async (c) => {
+  const user = requireUser(c)
   const body = await c.req.json()
   if (!body.drama_id) return badRequest(c, 'drama_id required')
+  if (!getWritableDrama(Number(body.drama_id), user.id)) return notFound(c)
   if (!body.image_config_id || !body.video_config_id || !body.audio_config_id) {
     return badRequest(c, 'image_config_id, video_config_id and audio_config_id are required')
+  }
+  if (!assertUserOwnsConfigIds(user, [body.image_config_id, body.video_config_id, body.audio_config_id])) {
+    return notFound(c)
   }
   const ts = now()
 
@@ -44,9 +51,31 @@ app.post('/', async (c) => {
   })
 })
 
+// DELETE /episodes/:id — 删除剧集及其关联数据
+app.delete('/:id', async (c) => {
+  const user = requireUser(c)
+  const id = Number(c.req.param('id'))
+  if (!getWritableEpisode(id, user.id)) return notFound(c)
+
+  // 删除关联数据
+  const sbs = db.select({ id: schema.storyboards.id }).from(schema.storyboards)
+    .where(eq(schema.storyboards.episodeId, id)).all()
+  for (const sb of sbs) {
+    db.delete(schema.storyboardCharacters).where(eq(schema.storyboardCharacters.storyboardId, sb.id)).run()
+  }
+  db.delete(schema.storyboards).where(eq(schema.storyboards.episodeId, id)).run()
+  db.delete(schema.episodeCharacters).where(eq(schema.episodeCharacters.episodeId, id)).run()
+  db.delete(schema.episodeScenes).where(eq(schema.episodeScenes.episodeId, id)).run()
+  db.delete(schema.episodes).where(eq(schema.episodes.id, id)).run()
+
+  return success(c, { deleted: id })
+})
+
 // PUT /episodes/:id - Update episode fields
 app.put('/:id', async (c) => {
+  const user = requireUser(c)
   const id = Number(c.req.param('id'))
+  if (!getWritableEpisode(id, user.id)) return notFound(c)
   const body = await c.req.json()
 
   const allowed = ['content', 'script_content', 'title', 'description', 'status']
@@ -70,7 +99,9 @@ app.put('/:id', async (c) => {
 
 // GET /episodes/:id/characters — characters linked to this episode
 app.get('/:id/characters', async (c) => {
+  const user = requireUser(c)
   const episodeId = Number(c.req.param('id'))
+  if (!getOwnedEpisode(episodeId, user.id)) return notFound(c)
   const links = db.select().from(schema.episodeCharacters)
     .where(eq(schema.episodeCharacters.episodeId, episodeId)).all()
   const charIds = links.map(l => l.characterId)
@@ -82,7 +113,9 @@ app.get('/:id/characters', async (c) => {
 
 // GET /episodes/:id/scenes — scenes linked to this episode
 app.get('/:id/scenes', async (c) => {
+  const user = requireUser(c)
   const episodeId = Number(c.req.param('id'))
+  if (!getOwnedEpisode(episodeId, user.id)) return notFound(c)
   const links = db.select().from(schema.episodeScenes)
     .where(eq(schema.episodeScenes.episodeId, episodeId)).all()
   const sceneIds = links.map(l => l.sceneId)
@@ -94,7 +127,9 @@ app.get('/:id/scenes', async (c) => {
 
 // GET /episodes/:episode_id/storyboards
 app.get('/:episode_id/storyboards', async (c) => {
+  const user = requireUser(c)
   const episodeId = Number(c.req.param('episode_id'))
+  if (!getOwnedEpisode(episodeId, user.id)) return notFound(c)
   const rows = db.select().from(schema.storyboards)
     .where(eq(schema.storyboards.episodeId, episodeId))
     .orderBy(schema.storyboards.storyboardNumber)
@@ -124,9 +159,11 @@ app.get('/:episode_id/storyboards', async (c) => {
 
 // GET /episodes/:id/pipeline-status — 流水线进度
 app.get('/:id/pipeline-status', async (c) => {
+  const user = requireUser(c)
   const episodeId = Number(c.req.param('id'))
-  const [ep] = db.select().from(schema.episodes).where(eq(schema.episodes.id, episodeId)).all()
-  if (!ep) return notFound(c, 'Episode not found')
+  const owned = getOwnedEpisode(episodeId, user.id)
+  if (!owned) return notFound(c, 'Episode not found')
+  const ep = owned.episode
 
   const chars = db.select().from(schema.characters).where(eq(schema.characters.dramaId, ep.dramaId)).all()
   const scenes = db.select().from(schema.scenes).where(eq(schema.scenes.dramaId, ep.dramaId)).all()

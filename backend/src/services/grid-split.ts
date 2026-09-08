@@ -2,9 +2,7 @@ import sharp from 'sharp'
 import fs from 'fs'
 import path from 'path'
 import { now } from '../utils/response.js'
-import { getAbsolutePath } from '../utils/storage.js'
-
-const DATA_DIR = getAbsolutePath('grid-cells')
+import { getAbsolutePath, userStorageAbsDir, toStaticRelative } from '../utils/storage.js'
 
 interface SplitResult {
   index: number
@@ -15,6 +13,7 @@ export async function splitGridImage(
   imagePath: string,
   rows: number,
   cols: number,
+  userId?: number | null,
 ): Promise<SplitResult[]> {
   const absPath = imagePath.startsWith('/')
     ? imagePath
@@ -27,7 +26,7 @@ export async function splitGridImage(
   const cellW = Math.floor(meta.width / cols)
   const cellH = Math.floor(meta.height / rows)
 
-  const outDir = DATA_DIR
+  const outDir = userStorageAbsDir(userId, 'grid-cells')
   fs.mkdirSync(outDir, { recursive: true })
 
   const results: SplitResult[] = []
@@ -45,7 +44,7 @@ export async function splitGridImage(
 
       results.push({
         index,
-        localPath: `static/grid-cells/${fileName}`,
+        localPath: toStaticRelative(userId, 'grid-cells', fileName),
       })
     }
   }

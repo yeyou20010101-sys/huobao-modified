@@ -1,11 +1,14 @@
 import { db, schema } from '../db/index.js'
 import { eq } from 'drizzle-orm'
-import { getActiveConfig, getConfigById } from './ai.js'
+import { resolveUserConfig } from './ai.js'
 import { now } from '../utils/response.js'
 import { downloadFile, readImageAsVideoReferenceDataUrl } from '../utils/storage.js'
+import { storageUserIdFromDramaId } from '../utils/ownership.js'
+import { resolveReferenceVideoWebUrl } from '../utils/reference-video-url.js'
 import { getVideoAdapter } from './adapters/registry'
 import type { AIConfig } from './adapters/types'
 import { logTaskError, logTaskPayload, logTaskProgress, logTaskStart, logTaskSuccess, logTaskWarn, redactUrl } from '../utils/task-logger.js'
+import { beginTask, refundTaskByRef, settleTaskByRef, storyboardBillingIds } from './billing.js'
 
 interface GenerateVideoParams {
   storyboardId?: number
@@ -17,30 +20,40 @@ interface GenerateVideoParams {
   firstFrameUrl?: string
   lastFrameUrl?: string
   referenceImageUrls?: string[]
+  referenceVideoUrls?: string[]
   duration?: number
   aspectRatio?: string
   configId?: number
+  userId: number
 }
 
-/** Seedance 等视频模型要求至少一张参考图 */
+function markVideoFailed(id: number, errorMsg: string) {
+  db.update(schema.videoGenerations)
+    .set({ status: 'failed', errorMsg, updatedAt: now() })
+    .where(eq(schema.videoGenerations.id, id))
+    .run()
+  refundTaskByRef('video_generations', id, errorMsg)
+}
+
+/** Seedance 等视频模型要求至少一张参考图或一段参考视频 */
 function assertVideoHasReferenceMedia(params: GenerateVideoParams) {
   const hasImage = !!params.imageUrl?.trim()
   const hasFirst = !!params.firstFrameUrl?.trim()
   const hasLast = !!params.lastFrameUrl?.trim()
   const hasRefs = (params.referenceImageUrls?.length ?? 0) > 0
-  if (hasImage || hasFirst || hasLast || hasRefs) return
-  throw new Error('请至少提供首帧、尾帧或参考图之一后再生成视频（当前视频模型不支持无图纯文生视频）')
+  const hasVideos = (params.referenceVideoUrls?.length ?? 0) > 0
+  if (hasImage || hasFirst || hasLast || hasRefs || hasVideos) return
+  throw new Error('请至少提供首帧、尾帧、参考图或参考视频之一后再生成视频')
 }
 
 export async function generateVideo(params: GenerateVideoParams): Promise<number> {
   assertVideoHasReferenceMedia(params)
   const ts = now()
-  const config = params.configId
-    ? getConfigById(params.configId)
-    : getActiveConfig('video')
+  const config = resolveUserConfig('video', params.configId, params.userId)
   if (!config) throw new Error('No active video AI config')
 
   const res = db.insert(schema.videoGenerations).values({
+    userId: params.userId,
     storyboardId: params.storyboardId,
     dramaId: params.dramaId,
     prompt: params.prompt,
@@ -51,6 +64,7 @@ export async function generateVideo(params: GenerateVideoParams): Promise<number
     firstFrameUrl: params.firstFrameUrl,
     lastFrameUrl: params.lastFrameUrl,
     referenceImageUrls: params.referenceImageUrls ? JSON.stringify(params.referenceImageUrls) : null,
+    referenceVideoUrls: params.referenceVideoUrls ? JSON.stringify(params.referenceVideoUrls) : null,
     duration: params.duration || 5,
     aspectRatio: params.aspectRatio || '16:9',
     status: 'processing',
@@ -59,6 +73,24 @@ export async function generateVideo(params: GenerateVideoParams): Promise<number
   }).run()
 
   const lastId = Number(res.lastInsertRowid)
+  const billingIds = storyboardBillingIds(params.storyboardId, params.dramaId)
+  try {
+    beginTask({
+      userId: params.userId,
+      taskType: 'video',
+      provider: config.provider,
+      model: params.model || config.model,
+      dramaId: billingIds.dramaId,
+      episodeId: billingIds.episodeId,
+      storyboardId: billingIds.storyboardId,
+      refType: 'video_generations',
+      refId: lastId,
+      idempotencyKey: `video:${lastId}`,
+    })
+  } catch (err) {
+    db.delete(schema.videoGenerations).where(eq(schema.videoGenerations.id, lastId)).run()
+    throw err
+  }
   logTaskStart('VideoTask', 'enqueue', {
     id: lastId,
     provider: config.provider,
@@ -101,6 +133,7 @@ async function processVideoGeneration(id: number, config: AIConfig) {
     const resolvedFirstFrameUrl = await normalizeVideoReferenceUrl(record.firstFrameUrl)
     const resolvedLastFrameUrl = await normalizeVideoReferenceUrl(record.lastFrameUrl)
     const resolvedReferenceImageUrls = await normalizeVideoReferenceUrls(record.referenceImageUrls)
+    const resolvedReferenceVideoUrls = await normalizeReferenceVideoUrls(record.referenceVideoUrls)
 
     // 使用 Adapter 构建请求
     const { url, method, headers, body } = adapter.buildGenerateRequest(config, {
@@ -112,6 +145,7 @@ async function processVideoGeneration(id: number, config: AIConfig) {
       firstFrameUrl: resolvedFirstFrameUrl,
       lastFrameUrl: resolvedLastFrameUrl,
       referenceImageUrls: resolvedReferenceImageUrls ? JSON.stringify(resolvedReferenceImageUrls) : null,
+      referenceVideoUrls: resolvedReferenceVideoUrls.length ? JSON.stringify(resolvedReferenceVideoUrls) : null,
       duration: record.duration,
       aspectRatio: record.aspectRatio,
     })
@@ -165,10 +199,7 @@ async function processVideoGeneration(id: number, config: AIConfig) {
     pollVideoTask(id, config, taskId!, record.storyboardId)
   } catch (err: any) {
     logTaskError('VideoTask', 'process', { id, provider: config.provider, error: err.message })
-    db.update(schema.videoGenerations)
-      .set({ status: 'failed', errorMsg: err.message, updatedAt: now() })
-      .where(eq(schema.videoGenerations.id, id))
-      .run()
+    markVideoFailed(id, err.message)
   }
 }
 
@@ -202,6 +233,36 @@ async function normalizeVideoReferenceUrls(raw: string | null | undefined): Prom
   return normalized.filter((item): item is string => !!item)
 }
 
+async function normalizeReferenceVideoUrl(value: string | null | undefined): Promise<string | null> {
+  try {
+    // Seedance 要求 reference_video 为公网 web URL，不能传 data:video
+    return await resolveReferenceVideoWebUrl(value)
+  } catch (err) {
+    logTaskWarn('VideoTask', 'reference-video-resolve-failed', {
+      value: String(value || '').slice(0, 120),
+      error: (err as Error).message,
+    })
+    throw err
+  }
+}
+
+async function normalizeReferenceVideoUrls(raw: string | null | undefined): Promise<string[]> {
+  if (!raw) return []
+  let refs: string[] = []
+  try {
+    refs = JSON.parse(raw)
+  } catch {
+    refs = []
+  }
+  const unique = Array.from(new Set(refs.map((item) => String(item || '').trim()).filter(Boolean)))
+  const normalized: string[] = []
+  for (const item of unique) {
+    const resolved = await normalizeReferenceVideoUrl(item)
+    if (resolved) normalized.push(resolved)
+  }
+  return normalized
+}
+
 async function pollVideoTask(id: number, config: AIConfig, taskId: string, storyboardId?: number | null) {
   const adapter = getVideoAdapter(config.provider)
 
@@ -231,28 +292,25 @@ async function pollVideoTask(id: number, config: AIConfig, taskId: string, story
       if (pollResp.status === 'failed') {
         const errMsg = pollResp.error || 'Video generation failed'
         logTaskError('VideoTask', 'poll-failed', { id, taskId, error: errMsg })
-        db.update(schema.videoGenerations)
-          .set({ status: 'failed', errorMsg: errMsg, updatedAt: now() })
-          .where(eq(schema.videoGenerations.id, id))
-          .run()
+        markVideoFailed(id, errMsg)
         return
       }
     } catch (err: any) {
       if (i === 299) {
         logTaskError('VideoTask', 'poll-timeout', { id, taskId, error: err.message })
-        db.update(schema.videoGenerations)
-          .set({ status: 'failed', errorMsg: `Timeout: ${err.message}`, updatedAt: now() })
-          .where(eq(schema.videoGenerations.id, id))
-          .run()
+        markVideoFailed(id, `Timeout: ${err.message}`)
         return
       }
       logTaskWarn('VideoTask', 'poll-retry', { id, taskId, attempt: i + 1, error: err.message })
     }
   }
+  markVideoFailed(id, 'Timeout: video polling exhausted')
 }
 
 async function handleVideoComplete(id: number, videoUrl: string, duration: number | null | undefined, storyboardId?: number | null) {
-  const localPath = await downloadFile(videoUrl, 'videos')
+  const [record] = db.select().from(schema.videoGenerations).where(eq(schema.videoGenerations.id, id)).all()
+  const storageUserId = storageUserIdFromDramaId(record?.dramaId, record?.userId || 0)
+  const localPath = await downloadFile(videoUrl, 'videos', storageUserId)
   db.update(schema.videoGenerations)
     .set({ videoUrl, localPath, status: 'completed', completedAt: now(), updatedAt: now() })
     .where(eq(schema.videoGenerations.id, id))
@@ -265,4 +323,5 @@ async function handleVideoComplete(id: number, videoUrl: string, duration: numbe
       .where(eq(schema.storyboards.id, storyboardId))
       .run()
   }
+  settleTaskByRef('video_generations', id)
 }

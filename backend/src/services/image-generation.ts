@@ -1,11 +1,13 @@
 import { db, schema } from '../db/index.js'
 import { eq } from 'drizzle-orm'
-import { getActiveConfig, getConfigById } from './ai.js'
+import { resolveUserConfig } from './ai.js'
 import { now } from '../utils/response.js'
 import { downloadFile, readImageAsImageReferenceDataUrl, saveBase64Image } from '../utils/storage.js'
+import { storageUserIdFromDramaId } from '../utils/ownership.js'
 import { getImageAdapter } from './adapters/registry'
 import type { AIConfig } from './adapters/types'
 import { logTaskError, logTaskPayload, logTaskProgress, logTaskStart, logTaskSuccess, logTaskWarn, redactUrl } from '../utils/task-logger.js'
+import { beginTask, refundTaskByRef, settleTaskByRef, storyboardBillingIds } from './billing.js'
 
 interface GenerateImageParams {
   storyboardId?: number
@@ -18,16 +20,24 @@ interface GenerateImageParams {
   referenceImages?: string[]
   frameType?: string
   configId?: number
+  userId: number
+}
+
+function markImageFailed(id: number, errorMsg: string) {
+  db.update(schema.imageGenerations)
+    .set({ status: 'failed', errorMsg, updatedAt: now() })
+    .where(eq(schema.imageGenerations.id, id))
+    .run()
+  refundTaskByRef('image_generations', id, errorMsg)
 }
 
 export async function generateImage(params: GenerateImageParams): Promise<number> {
   const ts = now()
-  const config = params.configId
-    ? getConfigById(params.configId)
-    : getActiveConfig('image')
+  const config = resolveUserConfig('image', params.configId, params.userId)
   if (!config) throw new Error('No active image AI config')
 
   const res = db.insert(schema.imageGenerations).values({
+    userId: params.userId,
     storyboardId: params.storyboardId,
     dramaId: params.dramaId,
     sceneId: params.sceneId,
@@ -44,6 +54,24 @@ export async function generateImage(params: GenerateImageParams): Promise<number
   }).run()
 
   const lastId = Number(res.lastInsertRowid)
+  const billingIds = storyboardBillingIds(params.storyboardId, params.dramaId)
+  try {
+    beginTask({
+      userId: params.userId,
+      taskType: 'image',
+      provider: config.provider,
+      model: params.model || config.model,
+      dramaId: billingIds.dramaId,
+      episodeId: billingIds.episodeId,
+      storyboardId: billingIds.storyboardId,
+      refType: 'image_generations',
+      refId: lastId,
+      idempotencyKey: `image:${lastId}`,
+    })
+  } catch (err) {
+    db.delete(schema.imageGenerations).where(eq(schema.imageGenerations.id, lastId)).run()
+    throw err
+  }
   logTaskStart('ImageTask', 'enqueue', {
     id: lastId,
     provider: config.provider,
@@ -154,10 +182,7 @@ async function processImageGeneration(id: number, config: AIConfig) {
     pollImageTask(id, config, taskId!)
   } catch (err: any) {
     logTaskError('ImageTask', 'process', { id, provider: config.provider, error: err.message })
-    db.update(schema.imageGenerations)
-      .set({ status: 'failed', errorMsg: err.message, updatedAt: now() })
-      .where(eq(schema.imageGenerations.id, id))
-      .run()
+    markImageFailed(id, err.message)
   }
 }
 
@@ -203,19 +228,13 @@ async function pollImageTask(id: number, config: AIConfig, taskId: string) {
   for (let i = 0; i < 120; i++) {
     if (Date.now() - startedAt >= maxDurationMs) {
       logTaskError('ImageTask', 'poll-timeout', { id, taskId, error: 'Polling exceeded 10 minutes' })
-      db.update(schema.imageGenerations)
-        .set({ status: 'failed', errorMsg: 'Timeout: Polling exceeded 10 minutes', updatedAt: now() })
-        .where(eq(schema.imageGenerations.id, id))
-        .run()
+      markImageFailed(id, 'Timeout: Polling exceeded 10 minutes')
       return
     }
     await new Promise(r => setTimeout(r, 5000))
     if (Date.now() - startedAt >= maxDurationMs) {
       logTaskError('ImageTask', 'poll-timeout', { id, taskId, error: 'Polling exceeded 10 minutes' })
-      db.update(schema.imageGenerations)
-        .set({ status: 'failed', errorMsg: 'Timeout: Polling exceeded 10 minutes', updatedAt: now() })
-        .where(eq(schema.imageGenerations.id, id))
-        .run()
+      markImageFailed(id, 'Timeout: Polling exceeded 10 minutes')
       return
     }
     try {
@@ -260,21 +279,20 @@ async function pollImageTask(id: number, config: AIConfig, taskId: string) {
     } catch (err: any) {
       if (i === 119 || Date.now() - startedAt >= maxDurationMs) {
         logTaskError('ImageTask', 'poll-timeout', { id, taskId, error: err.message })
-        db.update(schema.imageGenerations)
-          .set({ status: 'failed', errorMsg: `Timeout: ${err.message}`, updatedAt: now() })
-          .where(eq(schema.imageGenerations.id, id))
-          .run()
+        markImageFailed(id, `Timeout: ${err.message}`)
         return
       }
       logTaskWarn('ImageTask', 'poll-retry', { id, taskId, attempt: i + 1, error: err.message })
     }
   }
+  markImageFailed(id, 'Timeout: Polling exceeded 10 minutes')
 }
 
 async function handleImageComplete(id: number, provider: string, imageUrl: string) {
-  const localPath = await downloadFile(imageUrl, 'images')
   const rows = db.select().from(schema.imageGenerations).where(eq(schema.imageGenerations.id, id)).all()
   const record = rows[0]
+  const storageUserId = storageUserIdFromDramaId(record?.dramaId, record?.userId || 0)
+  const localPath = await downloadFile(imageUrl, 'images', storageUserId)
 
   db.update(schema.imageGenerations)
     .set({ imageUrl, localPath, status: 'completed', updatedAt: now() })
@@ -296,12 +314,14 @@ async function handleImageComplete(id: number, provider: string, imageUrl: strin
   if (record?.sceneId) {
     db.update(schema.scenes).set({ imageUrl: localPath, status: 'completed', updatedAt: now() }).where(eq(schema.scenes.id, record.sceneId)).run()
   }
+  settleTaskByRef('image_generations', id)
 }
 
 async function handleImageCompleteBase64(id: number, provider: string, base64Data: string, mimeType: string) {
-  const localPath = await saveBase64Image(base64Data, mimeType, 'images')
   const rows = db.select().from(schema.imageGenerations).where(eq(schema.imageGenerations.id, id)).all()
   const record = rows[0]
+  const storageUserId = storageUserIdFromDramaId(record?.dramaId, record?.userId || 0)
+  const localPath = await saveBase64Image(base64Data, mimeType, 'images', storageUserId)
 
   db.update(schema.imageGenerations)
     .set({ localPath, status: 'completed', updatedAt: now() })
@@ -323,4 +343,5 @@ async function handleImageCompleteBase64(id: number, provider: string, base64Dat
   if (record?.sceneId) {
     db.update(schema.scenes).set({ imageUrl: localPath, status: 'completed', updatedAt: now() }).where(eq(schema.scenes.id, record.sceneId)).run()
   }
+  settleTaskByRef('image_generations', id)
 }

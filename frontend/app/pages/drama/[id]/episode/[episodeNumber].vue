@@ -11,6 +11,7 @@
         <div class="studio-identity">
           <h1 class="studio-title">{{ drama.title }}</h1>
           <span class="studio-episode-chip">第 {{ episodeNumber }} 集</span>
+          <span v-if="isViewer" class="studio-episode-chip">只读协作</span>
           <div class="studio-meta-row">
             <span class="studio-meta-pill">{{ currentSubStageLabel }}</span>
             <span class="studio-meta-pill is-progress">{{ pipelineProgress }}/11</span>
@@ -799,6 +800,21 @@
                   </div>
                 </div>
               </div>
+              <button
+                type="button"
+                class="card asset-card asset-add-card"
+                aria-label="增加角色形象"
+                @click="openManualAssetDialog('character')"
+              >
+                <span class="asset-add-icon" aria-hidden="true">
+                  <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round">
+                    <line x1="12" y1="5" x2="12" y2="19"/>
+                    <line x1="5" y1="12" x2="19" y2="12"/>
+                  </svg>
+                </span>
+                <strong>增加角色形象</strong>
+                <span>手动补充未提取的角色</span>
+              </button>
             </div>
           </div>
 
@@ -863,6 +879,21 @@
                   </div>
                 </div>
               </div>
+              <button
+                type="button"
+                class="card asset-card asset-add-card asset-add-card-scene"
+                aria-label="增加场景图片"
+                @click="openManualAssetDialog('scene')"
+              >
+                <span class="asset-add-icon" aria-hidden="true">
+                  <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round">
+                    <line x1="12" y1="5" x2="12" y2="19"/>
+                    <line x1="5" y1="12" x2="19" y2="12"/>
+                  </svg>
+                </span>
+                <strong>增加场景图片</strong>
+                <span>手动补充未提取的场景</span>
+              </button>
             </div>
           </div>
 
@@ -999,7 +1030,7 @@
                     </div>
                     <div class="frame-desc">{{ sb.description || sb.title || '—' }}</div>
                     <div class="frame-meta">
-                      <span :class="['dot', getFirstFrame(sb) && 'ok', isPendingShotFrame(sb.id, 'first_frame') && 'pending']" />
+                      <span :class="['dot', getFirstFrame(sb) && 'ok', isFirstFrameBusy(sb.id) && 'pending']" />
                       <span class="dim" style="font-size:11px">首帧</span>
                       <span v-if="frameMode === 'first_last'" style="display:flex;align-items:center;gap:4px">
                         <span :class="['dot', getLastFrame(sb) && 'ok', isPendingShotFrame(sb.id, 'last_frame') && 'pending']" />
@@ -1010,7 +1041,7 @@
                   <!-- Thumbnails -->
                   <div class="frame-thumbs">
                     <div class="frame-thumb-wrap">
-                      <div class="frame-thumb" @click.stop="!isPendingShotFrame(sb.id, 'first_frame') && genShotFrame(sb, 'first_frame')">
+                      <div class="frame-thumb" @click.stop="!isFirstFrameBusy(sb.id) && genShotFrame(sb, 'first_frame')">
                         <img
                           v-if="getFirstFrame(sb)"
                           :src="'/' + getFirstFrame(sb)"
@@ -1018,14 +1049,28 @@
                           @click.stop="openImageViewer('/' + getFirstFrame(sb), `镜头 #${String(i + 1).padStart(2, '0')} 首帧`)"
                         />
                         <div v-else class="frame-thumb-empty">
-                          <Loader2 v-if="isPendingShotFrame(sb.id, 'first_frame')" :size="14" class="animate-spin" />
+                          <Loader2 v-if="isFirstFrameBusy(sb.id)" :size="14" class="animate-spin" />
                           <svg v-else width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
                         </div>
                         <span v-if="getFirstFrame(sb)" class="frame-re">
                           <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
                         </span>
                       </div>
-                      <span class="frame-thumb-label">{{ isPendingShotFrame(sb.id, 'first_frame') ? '首帧生成中' : '首帧' }}</span>
+                      <span class="frame-thumb-label">{{ firstFrameStatusLabel(sb) }}</span>
+                      <div class="frame-thumb-actions">
+                        <input
+                          :id="`first-frame-upload-${sb.id}`"
+                          type="file"
+                          accept="image/jpeg,image/png,image/webp,image/gif"
+                          class="asset-file-input"
+                          :disabled="isFirstFrameBusy(sb.id)"
+                          @change="onFirstFrameUpload(sb, $event)"
+                        />
+                        <label
+                          :for="`first-frame-upload-${sb.id}`"
+                          :class="['btn btn-sm', { disabled: isFirstFrameBusy(sb.id) }]"
+                        >{{ isPendingFirstFrameUpload(sb.id) ? '上传中' : '上传' }}</label>
+                      </div>
                     </div>
                     <div v-if="frameMode === 'first_last'" class="frame-thumb-wrap">
                       <div class="frame-thumb" @click.stop="!isPendingShotFrame(sb.id, 'last_frame') && genShotFrame(sb, 'last_frame')">
@@ -1249,6 +1294,14 @@
                 <button class="btn btn-sm" @click="batchVideos">
                   <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg>
                   批量视频
+                </button>
+                <button
+                  class="btn btn-sm"
+                  :disabled="!shotVidCount || batchDownloading"
+                  @click="batchDownloadVideos"
+                >
+                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                  {{ batchDownloading ? '下载中…' : '批量下载' }}
                 </button>
               </div>
             </div>
@@ -1490,6 +1543,72 @@
         </button>
       </div>
 
+      <div v-if="manualAssetDialog.open" class="overlay appearance-dialog-overlay" @click.self="closeManualAssetDialog">
+        <form class="card appearance-dialog manual-asset-dialog" @submit.prevent="saveManualAsset">
+          <div class="appearance-dialog-head">
+            <div>
+              <div class="appearance-dialog-kicker">手动补充</div>
+              <div class="appearance-dialog-title">
+                {{ manualAssetDialog.type === 'character' ? '增加角色形象' : '增加场景图片' }}
+              </div>
+              <div class="appearance-dialog-sub">
+                创建后会自动关联当前剧集，可继续上传参考图或直接生成。
+              </div>
+            </div>
+            <button type="button" class="btn btn-ghost btn-icon" aria-label="关闭" @click="closeManualAssetDialog">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            </button>
+          </div>
+
+          <template v-if="manualAssetDialog.type === 'character'">
+            <label class="field appearance-dialog-field">
+              <span class="field-label">角色名称</span>
+              <input v-model.trim="manualAssetDialog.name" class="input" maxlength="50" placeholder="例如：小女孩" required />
+            </label>
+            <label class="field appearance-dialog-field">
+              <span class="field-label">角色定位</span>
+              <input v-model.trim="manualAssetDialog.role" class="input" maxlength="50" placeholder="例如：主角、配角" />
+            </label>
+            <label class="field appearance-dialog-field">
+              <span class="field-label">外貌描述</span>
+              <textarea
+                v-model.trim="manualAssetDialog.description"
+                class="textarea manual-asset-textarea"
+                rows="5"
+                placeholder="性别、年龄、体型、面部特征、发型发色、服装等"
+              />
+            </label>
+          </template>
+
+          <template v-else>
+            <label class="field appearance-dialog-field">
+              <span class="field-label">场景名称</span>
+              <input v-model.trim="manualAssetDialog.name" class="input" maxlength="80" placeholder="例如：森林空地" required />
+            </label>
+            <label class="field appearance-dialog-field">
+              <span class="field-label">时间</span>
+              <input v-model.trim="manualAssetDialog.role" class="input" maxlength="30" placeholder="例如：清晨、夜晚" />
+            </label>
+            <label class="field appearance-dialog-field">
+              <span class="field-label">场景描述</span>
+              <textarea
+                v-model.trim="manualAssetDialog.description"
+                class="textarea manual-asset-textarea"
+                rows="5"
+                placeholder="空间结构、光线氛围、色调、关键道具等"
+              />
+            </label>
+          </template>
+
+          <div class="appearance-dialog-actions">
+            <button class="btn" type="button" @click="closeManualAssetDialog">取消</button>
+            <button class="btn btn-primary" type="submit" :disabled="manualAssetDialog.saving || !manualAssetDialog.name">
+              {{ manualAssetDialog.saving ? '创建中' : '确认增加' }}
+            </button>
+          </div>
+        </form>
+      </div>
+
       <div v-if="sceneDescriptionDialog.open" class="overlay appearance-dialog-overlay" @click.self="closeSceneDescriptionDialog">
         <div class="card appearance-dialog">
           <div class="appearance-dialog-head">
@@ -1584,6 +1703,7 @@ const dramaId = Number(route.params.id)
 const episodeNumber = Number(route.params.episodeNumber)
 
 const drama = ref(null), episode = ref(null), chars = ref([]), scenes = ref([]), sbs = ref([]), mergeData = ref(null)
+const isViewer = computed(() => drama.value?.my_role === 'viewer')
 const panel = ref('script')
 const { running: rn, runningType: rt, run: runAgent } = useAgent()
 
@@ -1645,8 +1765,12 @@ const pendingSceneImageIds = ref([])
 const pendingSceneUploadIds = ref([])
 const pendingSceneRefineIds = ref([])
 const pendingShotFrameKeys = ref([])
+/** 首帧手动上传进行中的镜头 id */
+const pendingFirstFrameUploadIds = ref([])
 const pendingVideoIds = ref([])
 const pendingComposeIds = ref([])
+/** 视频生成 Tab 批量下载进行中 */
+const batchDownloading = ref(false)
 const failedVideoMessages = ref({})
 const failedComposeMessages = ref({})
 const imageViewer = ref({ open: false, src: '', title: '' })
@@ -1654,6 +1778,15 @@ const imageViewer = ref({ open: false, src: '', title: '' })
 const appearanceDialog = ref({ open: false, charId: null, name: '', text: '', saving: false })
 /** 场景描述编辑弹窗 */
 const sceneDescriptionDialog = ref({ open: false, sceneId: null, location: '', text: '', saving: false })
+/** 手动补充未提取的角色或场景 */
+const manualAssetDialog = ref({
+  open: false,
+  type: 'character',
+  name: '',
+  role: '',
+  description: '',
+  saving: false,
+})
 
 function configLabel(config) {
   if (!config) return '未配置'
@@ -1743,6 +1876,16 @@ function framePendingKey(id, frameType) {
 
 function isPendingShotFrame(id, frameType) {
   return pendingShotFrameKeys.value.includes(framePendingKey(id, frameType))
+}
+
+/** 首帧手动上传是否进行中 */
+function isPendingFirstFrameUpload(id) {
+  return pendingFirstFrameUploadIds.value.includes(id)
+}
+
+/** 首帧区域是否忙碌（AI 生成或手动上传） */
+function isFirstFrameBusy(id) {
+  return isPendingShotFrame(id, 'first_frame') || isPendingFirstFrameUpload(id)
 }
 
 function isPendingVideo(id) {
@@ -2687,6 +2830,72 @@ function watchAsyncResult(check, attempts = 24, delay = 2500) {
   })()
 }
 
+/** 打开手动补充角色或场景弹窗 */
+function openManualAssetDialog(type) {
+  manualAssetDialog.value = {
+    open: true,
+    type,
+    name: '',
+    role: '',
+    description: '',
+    saving: false,
+  }
+}
+
+/** 关闭手动补充弹窗 */
+function closeManualAssetDialog() {
+  if (manualAssetDialog.value.saving) return
+  manualAssetDialog.value = {
+    open: false,
+    type: 'character',
+    name: '',
+    role: '',
+    description: '',
+    saving: false,
+  }
+}
+
+/** 创建并关联到当前剧集，随后刷新素材列表 */
+async function saveManualAsset() {
+  const form = manualAssetDialog.value
+  const name = form.name.trim()
+  if (!name || !epId.value) {
+    toast.warning(name ? '当前剧集尚未加载完成' : '请填写名称')
+    return
+  }
+
+  form.saving = true
+  try {
+    if (form.type === 'character') {
+      await characterAPI.create({
+        drama_id: dramaId,
+        episode_id: epId.value,
+        name,
+        role: form.role.trim(),
+        appearance: form.description.trim(),
+        description: form.description.trim(),
+      })
+      toast.success(`角色“${name}”已增加`)
+    } else {
+      await sceneAPI.create({
+        drama_id: dramaId,
+        episode_id: epId.value,
+        location: name,
+        time: form.role.trim(),
+        prompt: form.description.trim() || name,
+      })
+      toast.success(`场景“${name}”已增加`)
+    }
+    form.saving = false
+    closeManualAssetDialog()
+    await refresh()
+  } catch (error) {
+    toast.error(error?.message || '增加失败，请稍后重试')
+  } finally {
+    manualAssetDialog.value.saving = false
+  }
+}
+
 /** 打开角色外貌描述编辑弹窗 */
 function openAppearanceDialog(char) {
   appearanceDialog.value = {
@@ -2729,7 +2938,7 @@ async function onCharImageUpload(char, event) {
   const id = char.id
   try {
     if (!isPendingCharUpload(id)) pendingCharUploadIds.value.push(id)
-    const { path } = await uploadAPI.image(file)
+    const { path } = await uploadAPI.image(file, dramaId)
     await characterAPI.update(id, { image_url: path })
     const target = chars.value.find(c => c.id === id)
     if (target) {
@@ -2849,7 +3058,7 @@ async function onSceneImageUpload(scene, event) {
   const id = scene.id
   try {
     if (!isPendingSceneUpload(id)) pendingSceneUploadIds.value.push(id)
-    const { path } = await uploadAPI.image(file)
+    const { path } = await uploadAPI.image(file, dramaId)
     await sceneAPI.update(id, { image_url: path })
     const target = scenes.value.find(s => s.id === id)
     if (target) {
@@ -2977,6 +3186,39 @@ async function batchShotTTS() {
 
 function getFirstFrame(s) { return s?.first_frame_image || s?.firstFrameImage || null }
 function getLastFrame(s) { return s?.last_frame_image || s?.lastFrameImage || null }
+
+/** 首帧状态文案 */
+function firstFrameStatusLabel(sb) {
+  if (isPendingFirstFrameUpload(sb.id)) return '上传中'
+  if (isPendingShotFrame(sb.id, 'first_frame')) return '首帧生成中'
+  return '首帧'
+}
+
+/** 手动上传镜头首帧 */
+async function onFirstFrameUpload(sb, event) {
+  const input = event.target
+  const file = input?.files?.[0]
+  if (input) input.value = ''
+  if (!file) return
+
+  const id = sb.id
+  try {
+    if (!isPendingFirstFrameUpload(id)) pendingFirstFrameUploadIds.value.push(id)
+    const { path } = await uploadAPI.image(file, dramaId)
+    await storyboardAPI.update(id, { first_frame_image: path })
+    const target = sbs.value.find(item => item.id === id)
+    if (target) {
+      target.first_frame_image = path
+      target.firstFrameImage = path
+    }
+    toast.success(`镜头 #${sbs.value.findIndex(item => item.id === id) + 1} 首帧已上传`)
+    await refresh()
+  } catch (e) {
+    toast.error(e?.message || '上传失败')
+  } finally {
+    pendingFirstFrameUploadIds.value = pendingFirstFrameUploadIds.value.filter(item => item !== id)
+  }
+}
 function getStoryboardCover(s) { return s?.composed_image || s?.composedImage || getFirstFrame(s) || getLastFrame(s) || null }
 function getVideoUrl(s) { return s?.video_url || s?.videoUrl || null }
 function getComposedVideoUrl(s) { return s?.composed_video_url || s?.composedVideoUrl || null }
@@ -3152,6 +3394,7 @@ function buildVideoGenParams(sb) {
   const params = {
     storyboard_id: sb.id,
     drama_id: dramaId,
+    config_id: lockedVideoConfigId.value || undefined,
     prompt: sb.video_prompt || sb.videoPrompt || '',
     duration: Number(sb.duration || 5),
   }
@@ -3270,6 +3513,54 @@ function batchVideos() {
     }), 80, 4000)
   }
 }
+
+/**
+ * 批量下载本集已生成的镜头视频（顺序 Blob 触发，避免浏览器拦截）
+ */
+async function batchDownloadVideos() {
+  if (batchDownloading.value) return
+  const items = sbs.value
+    .map((sb, index) => ({ sb, index }))
+    .filter(({ sb }) => hasVid(sb))
+  if (!items.length) {
+    toast.info('暂无已生成的视频')
+    return
+  }
+
+  batchDownloading.value = true
+  let okCount = 0
+  let failCount = 0
+  try {
+    for (const { sb, index } of items) {
+      const path = getVideoUrl(sb)
+      if (!path) continue
+      const shotNo = String(sb.storyboard_number || sb.storyboardNumber || index + 1).padStart(2, '0')
+      try {
+        const res = await fetch('/' + path, { credentials: 'include' })
+        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+        const blob = await res.blob()
+        const objectUrl = URL.createObjectURL(blob)
+        const a = document.createElement('a')
+        a.href = objectUrl
+        a.download = `镜头-${shotNo}.mp4`
+        document.body.appendChild(a)
+        a.click()
+        a.remove()
+        URL.revokeObjectURL(objectUrl)
+        okCount += 1
+      } catch {
+        failCount += 1
+      }
+      // 间隔触发，降低浏览器拦截多文件下载的概率
+      await new Promise(resolve => setTimeout(resolve, 300))
+    }
+    if (okCount) toast.success(`已下载 ${okCount} 个视频`)
+    if (failCount) toast.error(`${failCount} 个视频下载失败`)
+  } finally {
+    batchDownloading.value = false
+  }
+}
+
 async function batchCompose() {
   await composeAPI.all(epId.value)
   pendingComposeIds.value = [...new Set(sbs.value.filter(sb => !!sb.video_url || !!sb.videoUrl).map(sb => sb.id))]
@@ -4099,6 +4390,37 @@ onMounted(() => { refresh(); loadConfigs(); loadVoices() })
   transition: transform 0.18s var(--ease-out), box-shadow 0.18s var(--ease-out), border-color 0.18s var(--ease-out);
 }
 .asset-card:hover { transform: translateY(-2px); box-shadow: 0 16px 30px rgba(20, 32, 54, 0.08); }
+.asset-add-card {
+  min-height: 318px;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  border: 1px dashed rgba(19, 51, 121, 0.34);
+  background: rgba(248, 251, 255, 0.7);
+  color: var(--text-2);
+  cursor: pointer;
+}
+.asset-add-card-scene { min-height: 244px; }
+.asset-add-card:hover,
+.asset-add-card:focus-visible {
+  border-color: var(--accent);
+  background: var(--accent-bg);
+  color: var(--accent-text);
+  outline: none;
+}
+.asset-add-card strong { font-size: 13px; font-weight: 650; }
+.asset-add-card > span:last-child { font-size: 11px; color: var(--text-3); }
+.asset-add-icon {
+  width: 58px;
+  height: 58px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 18px;
+  background: var(--bg-0);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-xs);
+}
 .asset-cover { position: relative; aspect-ratio: 1; background: var(--bg-2); overflow: hidden; }
 .asset-cover.wide { aspect-ratio: 16/9; }
 .asset-cover img { width: 100%; height: 100%; object-fit: cover; }
@@ -4195,6 +4517,22 @@ onMounted(() => { refresh(); loadConfigs(); loadVoices() })
 .frame-thumbs { display: flex; gap: 8px; flex-shrink: 0; }
 .frame-thumb-wrap { display: flex; flex-direction: column; gap: 3px; align-items: center; }
 .frame-thumb-label { font-size: 10px; font-weight: 600; color: var(--text-3); }
+.frame-thumb-actions {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+}
+.frame-thumb-actions label.btn {
+  font-size: 10px;
+  padding: 2px 8px;
+  min-height: 0;
+  line-height: 1.4;
+}
+.frame-thumb-actions label.btn.disabled {
+  pointer-events: none;
+  opacity: 0.45;
+}
 .frame-thumb {
   position: relative; width: 130px; aspect-ratio: 16/9;
   border-radius: 6px; overflow: hidden;
@@ -4326,6 +4664,11 @@ onMounted(() => { refresh(); loadConfigs(); loadVoices() })
 }
 .appearance-dialog-textarea {
   min-height: 220px;
+  resize: vertical;
+}
+.manual-asset-dialog { width: min(520px, calc(100vw - 32px)); }
+.manual-asset-textarea {
+  min-height: 120px;
   resize: vertical;
 }
 .appearance-dialog-actions {

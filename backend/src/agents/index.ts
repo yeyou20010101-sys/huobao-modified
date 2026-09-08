@@ -8,7 +8,7 @@ import { createOpenAI } from '@ai-sdk/openai'
 import { eq, isNull, and } from 'drizzle-orm'
 import { db, schema } from '../db/index.js'
 import { getTextConfig, getTextProviderBaseUrl } from '../services/ai.js'
-import { logTaskProgress } from '../utils/task-logger.js'
+import { logTaskProgress, logTaskWarn } from '../utils/task-logger.js'
 import { createScriptTools } from './tools/script-tools.js'
 import { createExtractTools } from './tools/extract-tools.js'
 import { createStoryboardTools } from './tools/storyboard-tools.js'
@@ -176,36 +176,87 @@ const DEFAULT_PROMPTS: Record<string, { name: string; instructions: string }> = 
 
 export const validAgentTypes = Object.keys(DEFAULT_PROMPTS)
 
-function getAgentConfig(agentType: string) {
+function getAgentConfig(agentType: string, userId: number) {
   const rows = db.select().from(schema.agentConfigs)
-    .where(and(eq(schema.agentConfigs.agentType, agentType), isNull(schema.agentConfigs.deletedAt)))
+    .where(and(
+      eq(schema.agentConfigs.agentType, agentType),
+      eq(schema.agentConfigs.userId, userId),
+      isNull(schema.agentConfigs.deletedAt),
+    ))
     .all()
   // Return active one, or first one
   return rows.find(r => r.isActive) || rows[0] || null
 }
 
-function getModel(dbConfig: any) {
-  const textConfig = getTextConfig()
+function getModel(dbConfig: typeof schema.agentConfigs.$inferSelect | null, userId: number) {
+  const textConfig = getTextConfig(userId)
   const resolvedBaseURL = getTextProviderBaseUrl(textConfig)
+  const configuredModel = dbConfig?.model?.trim() || ''
+  const modelName = configuredModel && textConfig.models.includes(configuredModel)
+    ? configuredModel
+    : textConfig.model
+
+  if (configuredModel && configuredModel !== modelName) {
+    logTaskWarn('AIConfig', 'agent-model-incompatible', {
+      agentType: dbConfig?.agentType,
+      configuredModel,
+      activeProvider: textConfig.provider,
+      availableModels: textConfig.models,
+      fallbackModel: modelName,
+      hint: 'Agent 保存的旧模型不属于当前文本服务，已自动使用当前服务默认模型',
+    })
+  }
+
+  try {
+    const endpointHost = new URL(resolvedBaseURL).hostname.toLowerCase()
+    if (
+      endpointHost === '127.0.0.1' ||
+      endpointHost === 'localhost' ||
+      endpointHost.endsWith('.natappfree.cc') ||
+      endpointHost.endsWith('.natapp1.cc')
+    ) {
+      logTaskWarn('AIConfig', 'text-endpoint-local-tunnel', {
+        provider: textConfig.provider,
+        baseUrl: resolvedBaseURL,
+        model: modelName,
+        hint: '该地址依赖本机穿透/本地模型；未启动时会出现 ECONNREFUSED 127.0.0.1:80',
+      })
+    }
+  } catch {
+    /* ignore parse errors — getTextProviderBaseUrl already validates */
+  }
+
   logTaskProgress('AIConfig', 'text-model-endpoint', {
     provider: textConfig.provider,
     baseUrl: resolvedBaseURL,
-    model: dbConfig?.model || textConfig.model,
+    model: modelName,
   })
   const provider = createOpenAI({
     baseURL: resolvedBaseURL,
     apiKey: textConfig.apiKey,
   } as any)
-  const modelName = dbConfig?.model || textConfig.model
   return provider.chat(modelName)
 }
 
-export function createAgent(type: string, episodeId: number, dramaId: number): Agent | null {
+export function resolveAgentBillingTarget(agentType: string, userId: number): { provider: string; model: string } {
+  const dbConfig = getAgentConfig(agentType, userId)
+  const textConfig = getTextConfig(userId)
+  const configuredModel = dbConfig?.model?.trim() || ''
+  const modelName = configuredModel && textConfig.models.includes(configuredModel)
+    ? configuredModel
+    : textConfig.model
+  return {
+    provider: textConfig.provider || '',
+    model: modelName || '',
+  }
+}
+
+export function createAgent(type: string, episodeId: number, dramaId: number, userId: number): Agent | null {
   const defaults = DEFAULT_PROMPTS[type]
   if (!defaults) return null
 
-  const dbConfig = getAgentConfig(type)
-  const model = getModel(dbConfig)
+  const dbConfig = getAgentConfig(type, userId)
+  const model = getModel(dbConfig, userId)
   const baseInstructions = dbConfig?.systemPrompt?.trim() || defaults.instructions
   const skillInstructions = loadAgentSkills(type)
   const instructions = skillInstructions

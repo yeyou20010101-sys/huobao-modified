@@ -27,17 +27,82 @@
 
     <div class="settings-content">
 
+      <!-- ===== 账号 ===== -->
+      <div v-if="tab === 'account'" class="settings-scroll">
+        <div class="settings-head">
+          <h2 class="settings-title">账号</h2>
+          <p class="settings-desc">查看当前登录信息，并使用旧密码修改登录密码。</p>
+        </div>
+        <section class="setup-panel card">
+          <div class="setup-panel-head compact">
+            <div>
+              <div class="setup-title">基本信息</div>
+              <div class="setup-desc">用户名和邮箱均可用于登录。</div>
+            </div>
+          </div>
+          <div class="account-meta">
+            <div class="field">
+              <span class="field-label">用户名</span>
+              <div class="account-value">{{ auth.user.value?.username || '—' }}</div>
+            </div>
+            <div class="field">
+              <span class="field-label">邮箱</span>
+              <div class="account-value">{{ auth.user.value?.email || '—' }}</div>
+            </div>
+            <div class="field">
+              <span class="field-label">验证状态</span>
+              <div class="account-value">{{ auth.emailVerified.value ? '已验证' : '未验证' }}</div>
+            </div>
+          </div>
+          <div v-if="!auth.emailVerified.value" class="account-actions account-verify">
+            <p class="setup-desc">未验证也可以登录，但无法通过邮箱找回密码。</p>
+            <button class="btn" type="button" :disabled="verifyLoading" @click="onResendVerify">
+              {{ verifyLoading ? '发送中…' : '重发验证邮件' }}
+            </button>
+            <p v-if="verifyMsg" class="setup-desc">{{ verifyMsg }}</p>
+          </div>
+        </section>
+        <section class="setup-panel card">
+          <div class="setup-panel-head compact">
+            <div>
+              <div class="setup-title">修改密码</div>
+              <div class="setup-desc">修改成功后其他设备上的旧会话将失效。</div>
+            </div>
+          </div>
+          <form class="account-form" @submit.prevent="onChangePassword">
+            <label class="field">
+              <span class="field-label">当前密码</span>
+              <input v-model="pwdForm.oldPassword" class="input" type="password" autocomplete="current-password" required />
+            </label>
+            <label class="field">
+              <span class="field-label">新密码</span>
+              <input v-model="pwdForm.newPassword" class="input" type="password" autocomplete="new-password" minlength="8" required />
+            </label>
+            <label class="field">
+              <span class="field-label">确认新密码</span>
+              <input v-model="pwdForm.confirmPassword" class="input" type="password" autocomplete="new-password" minlength="8" required />
+            </label>
+            <p v-if="pwdError" class="auth-error" role="alert">{{ pwdError }}</p>
+            <div class="account-actions">
+              <button class="btn btn-primary" type="submit" :disabled="pwdLoading">
+                {{ pwdLoading ? '保存中…' : '保存新密码' }}
+              </button>
+            </div>
+          </form>
+        </section>
+      </div>
+
       <!-- ===== AI 服务配置 ===== -->
       <div v-if="tab === 'ai'" class="settings-scroll">
         <div class="settings-head">
           <div class="settings-brand">
             <div class="settings-brand-mark">
-              <img v-if="showBrandImage" :src="brandLogo" alt="火宝短剧" class="settings-brand-logo" @error="showBrandImage = false" />
-              <span v-else class="settings-brand-fallback">火</span>
+              <img v-if="showBrandImage" :src="brandLogo" alt="鲸鱼短剧" class="settings-brand-logo" @error="showBrandImage = false" />
+              <span v-else class="settings-brand-fallback">鲸</span>
             </div>
             <div class="settings-brand-copy">
-              <div class="settings-brand-kicker">Huobao Shorts</div>
-              <div class="settings-brand-name">火宝短剧</div>
+              <div class="settings-brand-kicker">Whale Shorts</div>
+              <div class="settings-brand-name">鲸鱼短剧</div>
             </div>
           </div>
           <h2 class="settings-title">AI 服务配置</h2>
@@ -47,11 +112,11 @@
           <div class="setup-panel-head">
             <div>
               <div class="setup-kicker">Quick Setup</div>
-              <div class="setup-title">火宝推荐配置</div>
+              <div class="setup-title">鲸鱼推荐配置</div>
               <div class="setup-desc">一键写入文本、图片、视频、音频四类推荐配置，适合作为开箱默认方案。</div>
             </div>
             <button class="btn btn-primary" @click="presetDialog = true">
-              <Sparkles :size="14" /> 火宝一键配置
+              <Sparkles :size="14" /> 鲸鱼一键配置
             </button>
           </div>
           <div class="preset-grid">
@@ -123,12 +188,12 @@
         <div class="settings-head">
           <div class="settings-brand">
             <div class="settings-brand-mark">
-              <img v-if="showBrandImage" :src="brandLogo" alt="火宝短剧" class="settings-brand-logo" @error="showBrandImage = false" />
-              <span v-else class="settings-brand-fallback">火</span>
+              <img v-if="showBrandImage" :src="brandLogo" alt="鲸鱼短剧" class="settings-brand-logo" @error="showBrandImage = false" />
+              <span v-else class="settings-brand-fallback">鲸</span>
             </div>
             <div class="settings-brand-copy">
-              <div class="settings-brand-kicker">Huobao Shorts</div>
-              <div class="settings-brand-name">火宝短剧</div>
+              <div class="settings-brand-kicker">Whale Shorts</div>
+              <div class="settings-brand-name">鲸鱼短剧</div>
             </div>
           </div>
           <h2 class="settings-title">Agent 配置</h2>
@@ -202,12 +267,12 @@
           <div class="settings-head">
             <div class="settings-brand">
               <div class="settings-brand-mark">
-                <img v-if="showBrandImage" :src="brandLogo" alt="火宝短剧" class="settings-brand-logo" @error="showBrandImage = false" />
-                <span v-else class="settings-brand-fallback">火</span>
+                <img v-if="showBrandImage" :src="brandLogo" alt="鲸鱼短剧" class="settings-brand-logo" @error="showBrandImage = false" />
+                <span v-else class="settings-brand-fallback">鲸</span>
               </div>
               <div class="settings-brand-copy">
-                <div class="settings-brand-kicker">Huobao Shorts</div>
-                <div class="settings-brand-name">火宝短剧</div>
+                <div class="settings-brand-kicker">Whale Shorts</div>
+                <div class="settings-brand-name">鲸鱼短剧</div>
               </div>
             </div>
             <div style="display:flex;align-items:center;gap:10px">
@@ -295,7 +360,7 @@
         </div>
         <label class="field">
           <span class="field-label">配置名称</span>
-          <input v-model="cfgForm.name" class="input" placeholder="如 火宝默认图像服务" />
+          <input v-model="cfgForm.name" class="input" placeholder="如 鲸鱼默认图像服务" />
         </label>
         <label class="field"><span class="field-label">服务商</span>
           <BaseSelect v-model="cfgForm.provider" :options="providerSelectOptions" placeholder="选择服务商" searchable />
@@ -341,8 +406,8 @@
       <form class="modal card config-modal" @submit.prevent="applyHuobaoPreset">
         <div class="config-modal-head">
           <div>
-            <div class="setup-kicker">Huobao Preset</div>
-            <h2 class="modal-title">火宝一键配置</h2>
+            <div class="setup-kicker">Whale Preset</div>
+            <h2 class="modal-title">鲸鱼一键配置</h2>
             <div class="modal-note">自动创建或更新文本（阿里云百炼）、图片/视频（火山方舟）服务配置，并初始化 5 个 Agent 的默认模型为 Qwen3.6-Plus。</div>
           </div>
           <span class="tag tag-success">推荐</span>
@@ -407,16 +472,23 @@
 </template>
 
 <script setup>
-import { Plus, Pencil, Trash2, FileText, ChevronDown, Check, Loader2, Bot, Cpu, Sparkles } from 'lucide-vue-next'
+import { Plus, Pencil, Trash2, FileText, ChevronDown, Check, Loader2, Bot, Cpu, Sparkles, User } from 'lucide-vue-next'
 import BaseSelect from '~/components/BaseSelect.vue'
 import { toast } from 'vue-sonner'
 import { aiConfigAPI, agentConfigAPI, skillsAPI, voicesAPI } from '~/composables/useApi'
-import brandLogo from '~/assets/huobao-logo.png'
+import brandLogo from '~/assets/jingyu-mark.png'
 
 const showBrandImage = ref(true)
-const tab = ref('ai')
+const tab = ref('account')
 const showAdvanced = ref(false)
+const auth = useAuth()
+const pwdLoading = ref(false)
+const pwdError = ref('')
+const pwdForm = reactive({ oldPassword: '', newPassword: '', confirmPassword: '' })
+const verifyLoading = ref(false)
+const verifyMsg = ref('')
 const baseTabs = [
+  { id: 'account', label: '账号', icon: User },
   { id: 'ai', label: 'AI 服务', icon: Cpu },
 ]
 const advancedTabs = [
@@ -424,8 +496,44 @@ const advancedTabs = [
   { id: 'skills', label: 'Skills', icon: FileText },
 ]
 watch(showAdvanced, (v) => {
-  if (!v && tab.value !== 'ai') tab.value = 'ai'
+  if (!v && tab.value !== 'ai' && tab.value !== 'account') tab.value = 'account'
 })
+
+async function onResendVerify() {
+  verifyLoading.value = true
+  verifyMsg.value = ''
+  try {
+    await auth.sendVerification()
+    verifyMsg.value = '验证邮件已发送（若未配置 SMTP，请查看服务端日志中的链接）'
+  } catch (err) {
+    verifyMsg.value = err instanceof Error ? err.message : '发送失败'
+  } finally {
+    verifyLoading.value = false
+  }
+}
+
+async function onChangePassword() {
+  pwdError.value = ''
+  if (pwdForm.newPassword !== pwdForm.confirmPassword) {
+    pwdError.value = '两次输入的新密码不一致'
+    return
+  }
+  pwdLoading.value = true
+  try {
+    await auth.changePassword({
+      old_password: pwdForm.oldPassword,
+      new_password: pwdForm.newPassword,
+    })
+    pwdForm.oldPassword = ''
+    pwdForm.newPassword = ''
+    pwdForm.confirmPassword = ''
+    toast.success('密码已更新')
+  } catch (err) {
+    pwdError.value = err instanceof Error ? err.message : '修改密码失败'
+  } finally {
+    pwdLoading.value = false
+  }
+}
 
 // ===== AI Service Configs =====
 const cfgs = ref([])
@@ -635,7 +743,7 @@ async function applyHuobaoPreset() {
     await loadCfgs()
     await loadAgents()
     presetDialog.value = false
-    toast.success('火宝推荐配置与默认 Agent LLM 已写入')
+    toast.success('鲸鱼推荐配置与默认 Agent LLM 已写入')
   } catch (e) {
     toast.error(e.message)
   }
@@ -748,14 +856,24 @@ function getAgentCfg(type) {
   return agentCfgs.value.find(a => a.agent_type === type)
 }
 
+// 后端按优先级选取唯一文本服务，Agent 模型列表必须与该服务保持一致
+const activeTextConfig = computed(() =>
+  cfgs.value
+    .filter(c => c.service_type === 'text' && c.is_active)
+    .sort((a, b) => (b.priority || 0) - (a.priority || 0))[0],
+)
+
 const textModelGroups = computed(() => {
-  return cfgs.value
-    .filter(c => c.service_type === 'text' && c.is_active && c.api_key)
-    .map(c => ({
-      label: `${c.provider} — ${c.name}`,
-      models: Array.isArray(c.model) ? c.model : (c.model ? [c.model] : []),
-    }))
-    .filter(g => g.models.length > 0)
+  const config = activeTextConfig.value
+  if (!config) return []
+
+  const models = Array.isArray(config.model)
+    ? config.model
+    : (config.model ? [config.model] : [])
+
+  return models.length > 0
+    ? [{ label: `${config.provider} — ${config.name}`, models }]
+    : []
 })
 
 const textModelSelectOptions = computed(() =>
@@ -773,7 +891,8 @@ async function loadAgents() {
 function toggleAgentEdit(type) {
   if (editingAgent.value === type) { editingAgent.value = null; return }
   const cfg = getAgentCfg(type)
-  agentForm.model = cfg?.model || ''
+  const availableModels = textModelGroups.value.flatMap(group => group.models)
+  agentForm.model = availableModels.includes(cfg?.model) ? cfg.model : ''
   agentForm.temperature = cfg?.temperature ?? 0.7
   agentForm.max_tokens = cfg?.max_tokens ?? 4096
   agentForm.system_prompt = cfg?.system_prompt || defaultPrompts[type] || ''
@@ -956,6 +1075,12 @@ onMounted(() => { loadCfgs(); loadAgents(); loadAllSkills() })
 
 .settings-content { flex: 1; overflow: hidden; }
 .settings-scroll { height: 100%; overflow-y: auto; padding: 36px 48px; max-width: 840px; margin: 0 auto; animation: fadeUp 0.3s var(--ease-out); }
+.account-meta { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; padding: 0 20px 20px; }
+.account-value { font-size: 14px; font-weight: 600; color: var(--text-0); }
+.account-form { display: flex; flex-direction: column; gap: 12px; padding: 0 20px 20px; }
+.account-actions { display: flex; justify-content: flex-end; }
+.account-verify { padding: 0 20px 16px; flex-direction: column; align-items: flex-start; gap: 8px; }
+.auth-error { font-size: 13px; color: var(--error); }
 .settings-head { margin-bottom: 24px; }
 .settings-brand {
   display: flex;
@@ -964,20 +1089,23 @@ onMounted(() => { loadCfgs(); loadAgents(); loadAllSkills() })
   margin-bottom: 12px;
 }
 .settings-brand-mark {
-  width: 42px;
-  height: 42px;
-  border-radius: 15px;
-  border: 1px solid var(--border);
-  background: linear-gradient(180deg, rgba(255,255,255,0.98), rgba(242,247,255,0.9));
-  box-shadow: var(--shadow-sm);
+  width: 56px;
+  height: 56px;
+  border-radius: 14px;
+  border: none;
+  background: #fff;
+  box-shadow: none;
   display: flex;
   align-items: center;
   justify-content: center;
+  overflow: hidden;
+  flex-shrink: 0;
 }
 .settings-brand-logo {
-  width: 26px;
-  height: 26px;
+  width: 50px;
+  height: 50px;
   object-fit: contain;
+  object-position: center;
   display: block;
 }
 .settings-brand-fallback {

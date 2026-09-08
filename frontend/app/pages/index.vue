@@ -6,12 +6,19 @@
         <h1 class="page-title">短剧项目</h1>
         <p class="page-desc">{{ dramas.length }} 个项目</p>
       </div>
+      <div class="head-actions">
+        <div class="filter-chips">
+          <button type="button" :class="['chip', { active: listFilter === 'all' }]" @click="listFilter = 'all'">全部</button>
+          <button type="button" :class="['chip', { active: listFilter === 'owned' }]" @click="listFilter = 'owned'">我所有</button>
+          <button type="button" :class="['chip', { active: listFilter === 'shared' }]" @click="listFilter = 'shared'">与我共享</button>
+        </div>
       <button class="btn btn-primary" @click="showCreate = true">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round">
           <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
         </svg>
         新建项目
       </button>
+      </div>
     </div>
 
     <!-- Loading -->
@@ -24,7 +31,7 @@
     <!-- Grid -->
     <div v-else class="grid">
       <div
-        v-for="(d, i) in dramas"
+        v-for="(d, i) in visibleDramas"
         :key="d.id"
         class="card project-card"
         :style="{ animationDelay: `${i * 0.06}s` }"
@@ -41,7 +48,8 @@
               <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="10"/></svg>
               {{ d.episodes?.length || 0 }} 集
             </div>
-            <button class="btn btn-ghost btn-icon card-delete" @click.stop="delDrama(d)" title="删除">
+            <span v-if="d.my_role && d.my_role !== 'owner'" class="share-tag">与我共享</span>
+            <button v-if="d.my_role === 'owner' || !d.my_role" class="btn btn-ghost btn-icon card-delete" @click.stop="delDrama(d)" title="删除">
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
                 <polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4h6v2"/>
               </svg>
@@ -74,7 +82,7 @@
       </div>
 
       <!-- Empty State -->
-      <div v-if="!dramas.length" class="card empty-card" @click="showCreate = true">
+      <div v-if="!visibleDramas.length" class="card empty-card" @click="showCreate = true">
         <div class="empty-icon">
           <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round">
             <rect x="3" y="3" width="18" height="18" rx="3"/>
@@ -138,9 +146,16 @@ import BaseSelect from '~/components/BaseSelect.vue'
 const dramas = ref([])
 const loading = ref(false)
 const showCreate = ref(false)
+const listFilter = ref('all')
 const form = ref({ title: '', total_episodes: 1, style: '' })
 const styles = ['realistic', 'anime', 'ghibli', 'cinematic', 'comic', 'watercolor']
 const styleSelectOptions = computed(() => styles.map(s => ({ label: s, value: s })))
+
+const visibleDramas = computed(() => {
+  if (listFilter.value === 'owned') return dramas.value.filter(d => !d.my_role || d.my_role === 'owner')
+  if (listFilter.value === 'shared') return dramas.value.filter(d => d.my_role && d.my_role !== 'owner')
+  return dramas.value
+})
 
 async function load() {
   loading.value = true
@@ -301,6 +316,26 @@ onMounted(load)
   border-radius: 99px;
   border: 1px solid rgba(184,120,20,0.12);
 }
+.share-tag {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 8px;
+  color: var(--text-2);
+  border: 1px solid var(--border);
+  border-radius: 99px;
+}
+.head-actions { display: flex; align-items: center; gap: 12px; }
+.filter-chips { display: flex; gap: 6px; }
+.chip {
+  border: 1px solid var(--border);
+  background: var(--bg-0);
+  color: var(--text-2);
+  border-radius: 99px;
+  padding: 4px 10px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.chip.active { background: var(--accent-bg); color: var(--accent-text); border-color: rgba(76,125,255,0.18); }
 .meta-item {
   display: flex; align-items: center; gap: 4px;
   font-size: 12px; color: var(--text-3);

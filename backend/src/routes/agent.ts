@@ -2,9 +2,14 @@
  * Agent 聊天路由 — 非流式版本
  */
 import { Hono } from 'hono'
-import { createAgent, validAgentTypes } from '../agents/index.js'
-import { success, badRequest } from '../utils/response.js'
+import { createAgent, resolveAgentBillingTarget, validAgentTypes } from '../agents/index.js'
+import { explainTextApiConnectError, getTextConfig, getTextProviderBaseUrl } from '../services/ai.js'
+import { success, badRequest, notFound, taskError } from '../utils/response.js'
 import { logTaskError, logTaskPayload, logTaskProgress, logTaskStart, logTaskSuccess } from '../utils/task-logger.js'
+import { requireUser } from '../middleware/auth.js'
+import { getWritableDrama, getWritableEpisode } from '../utils/ownership.js'
+import { beginTask, refundTask, settleTask } from '../services/billing.js'
+import { randomUUID } from 'crypto'
 
 const app = new Hono()
 
@@ -24,6 +29,7 @@ function normalizeToolResult(entry: any) {
 
 // POST /agent/:type/chat — 非流式 Agent 对话
 app.post('/:type/chat', async (c) => {
+  const user = requireUser(c)
   const agentType = c.req.param('type')
   if (!validAgentTypes.includes(agentType)) {
     return badRequest(c, `Invalid agent type: ${agentType}`)
@@ -43,11 +49,30 @@ app.post('/:type/chat', async (c) => {
     logTaskError('Agent', agentType, { reason: 'missing drama_id or episode_id' })
     return badRequest(c, 'drama_id and episode_id are required')
   }
+  if (!getWritableDrama(Number(drama_id), user.id) || !getWritableEpisode(Number(episode_id), user.id)) {
+    return notFound(c)
+  }
 
-  const agent = createAgent(agentType, episode_id, drama_id)
+  const agent = createAgent(agentType, episode_id, drama_id, user.id)
   if (!agent) {
     logTaskError('Agent', agentType, { reason: 'agent not found' })
     return badRequest(c, 'Agent not found')
+  }
+
+  let hold
+  try {
+    const billingTarget = resolveAgentBillingTarget(agentType, user.id)
+    hold = beginTask({
+      userId: user.id,
+      taskType: 'agent',
+      provider: billingTarget.provider,
+      model: billingTarget.model,
+      dramaId: Number(drama_id),
+      episodeId: Number(episode_id),
+      idempotencyKey: `agent:${randomUUID()}`,
+    })
+  } catch (err) {
+    return taskError(c, err)
   }
 
   const startTime = performance.now()
@@ -80,6 +105,7 @@ app.post('/:type/chat', async (c) => {
     })
     logTaskPayload('Agent', `${agentType} tool-results`, normalizedToolResults)
 
+    settleTask(hold.id)
     return success(c, {
       type: 'done',
       text: result.text || '',
@@ -87,10 +113,19 @@ app.post('/:type/chat', async (c) => {
       toolResults: normalizedToolResults,
     })
   } catch (err: any) {
+    refundTask(hold.id, err?.message || 'Agent execution failed')
     const elapsed = ((performance.now() - startTime) / 1000).toFixed(1)
-    logTaskError('Agent', agentType, { elapsedSeconds: elapsed, error: err.message })
+    let message = err?.message || 'Agent execution failed'
+    try {
+      const textConfig = getTextConfig(user.id)
+      const baseUrl = getTextProviderBaseUrl(textConfig)
+      message = explainTextApiConnectError(err, baseUrl).message
+    } catch {
+      /* keep original message if config itself is broken */
+    }
+    logTaskError('Agent', agentType, { elapsedSeconds: elapsed, error: message })
     console.error(err.stack || err)
-    return badRequest(c, err.message || 'Agent execution failed')
+    return badRequest(c, message)
   }
 })
 

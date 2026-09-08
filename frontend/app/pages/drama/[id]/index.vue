@@ -26,7 +26,7 @@
           </div>
         </div>
       </div>
-      <button class="btn btn-primary" @click="openAddEpisode">
+      <button v-if="canWrite" class="btn btn-primary" @click="openAddEpisode">
         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round">
           <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
         </svg>
@@ -35,20 +35,38 @@
     </div>
 
     <!-- Episode List -->
-    <div class="section-label">
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
-        <rect x="2" y="2" width="20" height="20" rx="2.5"/>
-        <line x1="7" y1="8" x2="7" y2="16"/>
-        <line x1="10" y1="8" x2="10" y2="16"/>
-        <line x1="13" y1="8" x2="13" y2="16"/>
-        <line x1="16" y1="8" x2="16" y2="16"/>
-      </svg>
-      剧集列表
+    <div class="section-row">
+      <div class="section-label">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+          <rect x="2" y="2" width="20" height="20" rx="2.5"/>
+          <line x1="7" y1="8" x2="7" y2="16"/>
+          <line x1="10" y1="8" x2="10" y2="16"/>
+          <line x1="13" y1="8" x2="13" y2="16"/>
+          <line x1="16" y1="8" x2="16" y2="16"/>
+        </svg>
+        剧集列表
+      </div>
+      <div class="search-box">
+        <svg class="search-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+        </svg>
+        <input
+          v-model="episodeSearch"
+          class="search-input"
+          placeholder="搜索集数或标题..."
+          @keydown.esc="episodeSearch = ''"
+        />
+        <button v-if="episodeSearch" class="search-clear" @click="episodeSearch = ''" title="清除搜索">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+          </svg>
+        </button>
+      </div>
     </div>
 
     <div class="ep-grid">
       <div
-        v-for="(ep, i) in drama.episodes"
+        v-for="(ep, i) in filteredEpisodes"
         :key="ep.id"
         class="card ep-card"
         :style="{ animationDelay: `${i * 0.05}s` }"
@@ -63,15 +81,22 @@
             <span v-if="ep.duration" class="ep-duration">{{ ep.duration }}s</span>
           </div>
         </div>
-        <div class="ep-arrow">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-            <polyline points="9 18 15 12 9 6"/>
-          </svg>
+        <div class="ep-actions">
+          <button v-if="canWrite" class="btn btn-ghost btn-icon" title="删除此集" @click.stop="delEpisode(ep)">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4h6v2"/>
+            </svg>
+          </button>
+          <div class="ep-arrow">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="9 18 15 12 9 6"/>
+            </svg>
+          </div>
         </div>
       </div>
 
       <!-- Empty episode state -->
-      <div v-if="!drama.episodes?.length" class="card ep-empty">
+      <div v-if="!filteredEpisodes.length" class="card ep-empty">
         <div class="ep-empty-icon">
           <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round">
             <circle cx="12" cy="12" r="10"/>
@@ -79,9 +104,57 @@
             <line x1="8" y1="12" x2="16" y2="12"/>
           </svg>
         </div>
-        <p>点击上方「添加集」创建第一集</p>
+        <p v-if="!drama.episodes?.length">{{ canWrite ? '点击上方「添加集」创建第一集' : '暂无剧集' }}</p>
+        <p v-else>没有匹配的剧集</p>
       </div>
     </div>
+
+    <section class="collab-panel card">
+      <div class="collab-head">
+        <div>
+          <h2 class="collab-title">协作</h2>
+          <p class="collab-desc">按项目邀请已注册用户。协作者生成时使用自己的 AI 配置。</p>
+        </div>
+        <span class="share-tag">{{ roleLabel(drama.my_role) }}</span>
+      </div>
+      <form v-if="isOwner" class="collab-form" @submit.prevent="inviteMember">
+        <input v-model="inviteIdentifier" class="input" placeholder="用户名或邮箱" required />
+        <select v-model="inviteRole" class="input">
+          <option value="editor">可编辑</option>
+          <option value="viewer">只读</option>
+        </select>
+        <button class="btn btn-primary" type="submit" :disabled="inviteLoading">
+          {{ inviteLoading ? '邀请中…' : '邀请' }}
+        </button>
+      </form>
+      <p v-if="inviteError" class="auth-error">{{ inviteError }}</p>
+      <ul class="member-list">
+        <li v-for="member in members" :key="member.user_id" class="member-row">
+          <div>
+            <strong>{{ member.username }}</strong>
+            <span class="member-email">{{ member.email }}</span>
+          </div>
+          <div class="member-actions">
+            <select
+              v-if="isOwner && member.role !== 'owner'"
+              class="input"
+              :value="member.role"
+              @change="changeRole(member, $event.target.value)"
+            >
+              <option value="editor">可编辑</option>
+              <option value="viewer">只读</option>
+            </select>
+            <span v-else class="share-tag">{{ roleLabel(member.role) }}</span>
+            <button
+              v-if="isOwner && member.role !== 'owner'"
+              class="btn btn-ghost"
+              type="button"
+              @click="removeMember(member)"
+            >移除</button>
+          </div>
+        </li>
+      </ul>
+    </section>
 
     <div v-if="addDialog" class="dialog-mask" @click.self="addDialog = false">
       <div class="card dialog">
@@ -156,6 +229,13 @@ import { aiConfigAPI, dramaAPI, episodeAPI } from '~/composables/useApi'
 const route = useRoute()
 const drama = ref(null)
 const dramaId = Number(route.params.id)
+const members = ref([])
+const inviteIdentifier = ref('')
+const inviteRole = ref('editor')
+const inviteLoading = ref(false)
+const inviteError = ref('')
+const canWrite = computed(() => drama.value?.my_role !== 'viewer')
+const isOwner = computed(() => drama.value?.my_role === 'owner')
 const addDialog = ref(false)
 const creatingEpisode = ref(false)
 const newEpisodeTitle = ref('')
@@ -165,6 +245,18 @@ const audioConfigs = ref([])
 const newEpisodeImageConfigId = ref(null)
 const newEpisodeVideoConfigId = ref(null)
 const newEpisodeAudioConfigId = ref(null)
+
+const episodeSearch = ref('')
+
+const filteredEpisodes = computed(() => {
+  const q = episodeSearch.value.trim().toLowerCase()
+  if (!q) return drama.value?.episodes || []
+  return (drama.value?.episodes || []).filter(ep => {
+    const num = String(ep.episode_number || ep.episodeNumber || '')
+    const title = (ep.title || '').toLowerCase()
+    return num.includes(q) || title.includes(q)
+  })
+})
 
 function hasScript(ep) { return !!(ep.script_content || ep.scriptContent) }
 
@@ -183,6 +275,51 @@ const canCreateEpisode = computed(() => !!(newEpisodeImageConfigId.value && newE
 async function load() {
   try {
     drama.value = await dramaAPI.get(dramaId)
+    members.value = await dramaAPI.members(dramaId)
+  } catch (e) {
+    toast.error(e.message)
+  }
+}
+
+function roleLabel(role) {
+  if (role === 'owner') return '所有者'
+  if (role === 'editor') return '可编辑'
+  if (role === 'viewer') return '只读'
+  return role || '成员'
+}
+
+async function inviteMember() {
+  inviteError.value = ''
+  inviteLoading.value = true
+  try {
+    await dramaAPI.inviteMember(dramaId, {
+      identifier: inviteIdentifier.value.trim(),
+      role: inviteRole.value,
+    })
+    inviteIdentifier.value = ''
+    toast.success('已邀请')
+    members.value = await dramaAPI.members(dramaId)
+  } catch (e) {
+    inviteError.value = e.message
+  } finally {
+    inviteLoading.value = false
+  }
+}
+
+async function changeRole(member, role) {
+  try {
+    await dramaAPI.updateMember(dramaId, member.user_id, { role })
+    members.value = await dramaAPI.members(dramaId)
+  } catch (e) {
+    toast.error(e.message)
+  }
+}
+
+async function removeMember(member) {
+  if (!confirm(`移除 ${member.username}？`)) return
+  try {
+    await dramaAPI.removeMember(dramaId, member.user_id)
+    members.value = await dramaAPI.members(dramaId)
   } catch (e) {
     toast.error(e.message)
   }
@@ -228,6 +365,17 @@ async function addEpisode() {
     toast.error(e.message)
   } finally {
     creatingEpisode.value = false
+  }
+}
+
+async function delEpisode(ep) {
+  if (!confirm(`确定要删除「${ep.title}」吗？此操作将同时删除该集下的所有分镜数据，不可撤销。`)) return
+  try {
+    await episodeAPI.del(ep.id)
+    toast.success(`已删除「${ep.title}」`)
+    load()
+  } catch (e) {
+    toast.error(e.message)
   }
 }
 
@@ -282,13 +430,75 @@ onMounted(() => { load(); loadConfigs() })
   font-size: 12px; color: var(--text-2);
 }
 
+/* Section row */
+.section-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 12px;
+}
+
 /* Section label */
 .section-label {
   display: flex; align-items: center; gap: 7px;
   font-size: 11px; font-weight: 700;
   color: var(--text-3); letter-spacing: 0.08em;
   text-transform: uppercase;
-  margin-bottom: 12px;
+  flex-shrink: 0;
+}
+
+/* Search box */
+.search-box {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--bg-0);
+  transition: border-color 0.18s var(--ease-out), box-shadow 0.18s var(--ease-out);
+  max-width: 240px;
+}
+.search-box:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(184,120,20,0.08);
+}
+.search-icon {
+  flex-shrink: 0;
+  color: var(--text-3);
+}
+.search-input {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  outline: none;
+  background: transparent;
+  font-size: 12px;
+  color: var(--text-0);
+  font-family: inherit;
+}
+.search-input::placeholder {
+  color: var(--text-3);
+}
+.search-clear {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: none;
+  background: var(--bg-2);
+  color: var(--text-3);
+  cursor: pointer;
+  transition: all 0.15s;
+  padding: 0;
+}
+.search-clear:hover {
+  background: var(--bg-hover);
+  color: var(--text-0);
 }
 
 /* Episode Grid */
@@ -335,6 +545,9 @@ onMounted(() => { load(); loadConfigs() })
 .status-text { font-size: 11px; color: var(--text-3); }
 .ep-duration { font-size: 11px; color: var(--text-3); font-family: var(--font-mono); margin-left: 4px; }
 
+.ep-actions { display: flex; align-items: center; gap: 4px; flex-shrink: 0; }
+.ep-actions .btn-ghost { color: var(--text-3); }
+.ep-actions .btn-ghost:hover { color: var(--error); }
 .ep-arrow { color: var(--text-3); flex-shrink: 0; transition: transform 0.18s; }
 .ep-card:hover .ep-arrow { transform: translateX(3px); color: var(--accent); }
 
@@ -498,4 +711,20 @@ onMounted(() => { load(); loadConfigs() })
     align-items: stretch;
   }
 }
+
+.collab-panel { margin-top: 28px; padding: 18px 20px; display: flex; flex-direction: column; gap: 14px; }
+.collab-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
+.collab-title { font-size: 16px; font-weight: 700; }
+.collab-desc { font-size: 13px; color: var(--text-3); margin-top: 4px; }
+.collab-form { display: flex; gap: 8px; flex-wrap: wrap; }
+.collab-form .input { min-width: 180px; }
+.member-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.member-row { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.member-email { display: block; font-size: 12px; color: var(--text-3); }
+.member-actions { display: flex; gap: 8px; align-items: center; }
+.share-tag {
+  font-size: 11px; font-weight: 600; padding: 2px 8px;
+  color: var(--text-2); border: 1px solid var(--border); border-radius: 99px;
+}
+.auth-error { font-size: 13px; color: var(--error); }
 </style>

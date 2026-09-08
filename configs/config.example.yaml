@@ -1,5 +1,5 @@
 app:
-  name: "Huobao Drama API"
+  name: "鲸鱼短剧 API"
   version: "1.0.0"
   debug: true
   language: "zh" # 系统语言：zh(中文) 或 en(英文)
@@ -7,8 +7,10 @@ app:
 server:
   port: 5678
   host: "0.0.0.0"
+  # 旧配置示例；当前 TS 后端在代码内放行 localhost + 内网私有 Origin
+  # 额外域名可设环境变量 CORS_ORIGINS=https://a.com,https://b.com
   cors_origins:
-    - "http://localhost:3012"
+    - "http://localhost:3013"
   read_timeout: 600
   write_timeout: 600
 
@@ -21,9 +23,25 @@ database:
 storage:
   type: "local"
   local_path: "./data/storage"
+  # 本地预览用；Seedance 参考视频需要公网地址，请另设环境变量 PUBLIC_MEDIA_BASE_URL
+  # 例如: PUBLIC_MEDIA_BASE_URL=https://your-domain.com
+  # 未配置时，后端会将本地参考视频临时上传为公网 URL（可用 REFERENCE_VIDEO_TEMP_UPLOAD=0 关闭）
   base_url: "http://localhost:5678/static"
 
 ai:
   default_text_provider: "openai"
   default_image_provider: "openai"
   default_video_provider: "doubao"
+
+# 邮件里的验证/重置链接指向前端
+app_public_url: "http://localhost:3013"
+
+# 163/QQ/企业邮箱 SMTP；163 请填授权码，不要用登录密码
+# 环境变量可覆盖：SMTP_HOST / SMTP_PORT / SMTP_SECURE / SMTP_USER / SMTP_PASS / SMTP_FROM / APP_PUBLIC_URL
+mail:
+  smtp_host: "smtp.163.com"
+  smtp_port: 465
+  smtp_secure: true
+  smtp_user: ""
+  smtp_pass: ""
+  from: "鲸鱼短剧 <noreply@example.com>"

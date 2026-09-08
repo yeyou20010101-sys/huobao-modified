@@ -2,7 +2,8 @@ import { Hono } from 'hono'
 import fs from 'fs'
 import path from 'path'
 import { fileURLToPath } from 'url'
-import { success, badRequest } from '../utils/response.js'
+import { success, badRequest, forbidden } from '../utils/response.js'
+import { requireUser } from '../middleware/auth.js'
 
 const app = new Hono()
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -53,6 +54,8 @@ app.get('/*', async (c) => {
 
 // PUT /skills/:id — Update skill content
 app.put('/*', async (c) => {
+  const user = requireUser(c)
+  if (user.role !== 'admin') return forbidden(c)
   const id = c.req.path.slice('/api/v1/skills/'.length)
   const body = await c.req.json()
   const skillDir = path.join(SKILLS_DIR, id)
@@ -64,6 +67,8 @@ app.put('/*', async (c) => {
 
 // POST /skills — Create new skill directory
 app.post('/', async (c) => {
+  const user = requireUser(c)
+  if (user.role !== 'admin') return forbidden(c)
   const body = await c.req.json()
   const { id, name, description } = body
   if (!id) return badRequest(c, 'Skill id is required')
@@ -87,6 +92,8 @@ Write your skill content here.
 
 // DELETE /skills/:id — Delete skill directory
 app.delete('/*', async (c) => {
+  const user = requireUser(c)
+  if (user.role !== 'admin') return forbidden(c)
   const id = c.req.path.slice('/api/v1/skills/'.length)
   const skillDir = path.join(SKILLS_DIR, id)
   if (!fs.existsSync(skillDir)) return badRequest(c, 'Skill not found')

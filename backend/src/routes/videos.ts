@@ -1,26 +1,30 @@
 import { Hono } from 'hono'
 import { eq } from 'drizzle-orm'
 import { db, schema } from '../db/index.js'
-import { success, created, badRequest } from '../utils/response.js'
+import { success, created, badRequest, notFound, taskError } from '../utils/response.js'
 import { generateVideo } from '../services/video-generation.js'
 import { logTaskError, logTaskPayload, logTaskStart, logTaskSuccess } from '../utils/task-logger.js'
 import { resolveVideoReferenceGeneration } from '../utils/video-reference-prompt.js'
+import { requireUser } from '../middleware/auth.js'
+import { getOwnedDrama, getOwnedStoryboard, getOwnedVideoGeneration, getWritableDrama, getWritableStoryboard } from '../utils/ownership.js'
+import { refundTaskByRef } from '../services/billing.js'
 
 const app = new Hono()
 
 // POST /videos — Generate video
 app.post('/', async (c) => {
+  const user = requireUser(c)
   const body = await c.req.json()
   if (!body.prompt) return badRequest(c, 'prompt is required')
 
   try {
     let configId: number | undefined = body.config_id
     if (body.storyboard_id) {
-      const [sb] = db.select().from(schema.storyboards).where(eq(schema.storyboards.id, Number(body.storyboard_id))).all()
-      if (sb) {
-        const [ep] = db.select().from(schema.episodes).where(eq(schema.episodes.id, sb.episodeId)).all()
-        if (ep?.videoConfigId != null) configId = ep.videoConfigId
-      }
+      const owned = getWritableStoryboard(Number(body.storyboard_id), user.id)
+      if (!owned) return notFound(c)
+      if (owned.episode?.videoConfigId != null) configId = owned.episode.videoConfigId
+    } else if (body.drama_id && !getWritableDrama(Number(body.drama_id), user.id)) {
+      return notFound(c)
     }
 
     let prompt = String(body.prompt || '')
@@ -67,6 +71,7 @@ app.post('/', async (c) => {
       duration: body.duration,
       aspectRatio: body.aspect_ratio,
       configId,
+      userId: user.id,
     })
 
     const [record] = db.select().from(schema.videoGenerations)
@@ -75,24 +80,32 @@ app.post('/', async (c) => {
     return created(c, record)
   } catch (err: any) {
     logTaskError('VideoAPI', 'generate', { error: err.message })
-    return badRequest(c, err.message)
+    return taskError(c, err)
   }
 })
 
 // GET /videos/:id
 app.get('/:id', async (c) => {
+  const user = requireUser(c)
   const id = Number(c.req.param('id'))
-  const [row] = db.select().from(schema.videoGenerations)
-    .where(eq(schema.videoGenerations.id, id)).all()
-  return success(c, row || null)
+  const row = getOwnedVideoGeneration(id, user.id)
+  if (!row) return notFound(c)
+  return success(c, row)
 })
 
 // GET /videos — List by storyboard_id or drama_id
 app.get('/', async (c) => {
+  const user = requireUser(c)
   const storyboardId = c.req.query('storyboard_id')
   const dramaId = c.req.query('drama_id')
 
+  if (storyboardId && !getOwnedStoryboard(Number(storyboardId), user.id)) return notFound(c)
+  if (dramaId && !getOwnedDrama(Number(dramaId), user.id)) return notFound(c)
+
   let rows = db.select().from(schema.videoGenerations).all()
+  if (!storyboardId && !dramaId) {
+    rows = rows.filter(r => r.userId === user.id)
+  }
 
   if (storyboardId) rows = rows.filter(r => r.storyboardId === Number(storyboardId))
   if (dramaId) rows = rows.filter(r => r.dramaId === Number(dramaId))
@@ -102,7 +115,16 @@ app.get('/', async (c) => {
 
 // DELETE /videos/:id
 app.delete('/:id', async (c) => {
+  const user = requireUser(c)
   const id = Number(c.req.param('id'))
+  const row = getOwnedVideoGeneration(id, user.id)
+  if (!row) return notFound(c)
+  if (row.userId !== user.id) {
+    if (!row.dramaId || !getWritableDrama(row.dramaId, user.id)) return notFound(c)
+  }
+  if (row.status === 'processing') {
+    refundTaskByRef('video_generations', id, '用户删除进行中的任务')
+  }
   db.delete(schema.videoGenerations).where(eq(schema.videoGenerations.id, id)).run()
   return success(c)
 })

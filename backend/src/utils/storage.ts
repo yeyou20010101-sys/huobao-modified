@@ -6,15 +6,62 @@ import path from 'path'
 import { fileURLToPath } from 'url'
 import sharp from 'sharp'
 import { v4 as uuid } from 'uuid'
+import { canReadOwnerStorage } from './ownership.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const STORAGE_ROOT = process.env.STORAGE_PATH || path.resolve(__dirname, '../../../data/static')
 
+/** 新文件写入 static/users/{userId}/{subDir}；无 userId 时保持旧目录（仅迁移脚本/管理员遗留） */
+export function userStorageSubDir(userId: number | null | undefined, subDir: string): string {
+  if (typeof userId === 'number' && Number.isFinite(userId) && userId > 0) {
+    return `users/${userId}/${subDir}`
+  }
+  return subDir
+}
+
+export function userStorageAbsDir(userId: number | null | undefined, subDir: string): string {
+  return path.join(STORAGE_ROOT, userStorageSubDir(userId, subDir))
+}
+
+export function toStaticRelative(userId: number | null | undefined, subDir: string, filename: string): string {
+  return `static/${userStorageSubDir(userId, subDir)}/${filename}`
+}
+
+export function canUserReadStaticPath(user: { id: number; role: string }, urlPath: string): boolean {
+  let decoded = urlPath
+  try {
+    decoded = decodeURIComponent(urlPath)
+  } catch {
+    /* keep raw */
+  }
+  const normalized = path.posix.normalize(decoded.replace(/\\/g, '/'))
+  if (normalized.includes('..')) return false
+  const rel = normalized.replace(/^\/+/, '')
+  if (!rel.startsWith('static/')) return false
+  const rest = rel.slice('static/'.length)
+  if (rest.startsWith('users/')) {
+    if (user.role === 'admin') return true
+    const match = rest.match(/^users\/(\d+)(?:\/|$)/)
+    if (!match) return false
+    const ownerId = Number(match[1])
+    if (ownerId === user.id) return true
+    return canReadOwnerStorage(user.id, ownerId)
+  }
+  return user.role === 'admin'
+}
+
+export function assertUserCanUseMediaPath(user: { id: number; role: string }, mediaPath: string): boolean {
+  const raw = String(mediaPath || '').trim().replace(/^\/+/, '')
+  if (!raw.startsWith('static/')) return false
+  return canUserReadStaticPath(user, `/${raw}`)
+}
+
 /**
  * 下载远程文件到本地存储
  */
-export async function downloadFile(url: string, subDir: string): Promise<string> {
-  const dir = path.join(STORAGE_ROOT, subDir)
+export async function downloadFile(url: string, subDir: string, userId?: number | null): Promise<string> {
+  const resolved = userStorageSubDir(userId, subDir)
+  const dir = path.join(STORAGE_ROOT, resolved)
   fs.mkdirSync(dir, { recursive: true })
 
   const ext = getExtFromUrl(url)
@@ -27,15 +74,20 @@ export async function downloadFile(url: string, subDir: string): Promise<string>
   const buffer = Buffer.from(await resp.arrayBuffer())
   fs.writeFileSync(filePath, buffer)
 
-  // 返回相对路径（供 API 返回给前端）
-  return `static/${subDir}/${filename}`
+  return `static/${resolved}/${filename}`
 }
 
 /**
  * 保存上传的文件
  */
-export async function saveUploadedFile(data: ArrayBuffer, subDir: string, originalName: string): Promise<string> {
-  const dir = path.join(STORAGE_ROOT, subDir)
+export async function saveUploadedFile(
+  data: ArrayBuffer,
+  subDir: string,
+  originalName: string,
+  userId?: number | null,
+): Promise<string> {
+  const resolved = userStorageSubDir(userId, subDir)
+  const dir = path.join(STORAGE_ROOT, resolved)
   fs.mkdirSync(dir, { recursive: true })
 
   const ext = path.extname(originalName) || '.bin'
@@ -43,7 +95,7 @@ export async function saveUploadedFile(data: ArrayBuffer, subDir: string, origin
   const filePath = path.join(dir, filename)
 
   fs.writeFileSync(filePath, Buffer.from(data))
-  return `static/${subDir}/${filename}`
+  return `static/${resolved}/${filename}`
 }
 
 function getExtFromUrl(url: string): string {
@@ -69,8 +121,14 @@ export function getAbsolutePath(relativePath: string): string {
  * 保存 Base64 编码的图片数据到本地存储
  * 用于 Gemini 等只返回 base64 数据的厂商
  */
-export async function saveBase64Image(base64Data: string, mimeType: string, subDir: string): Promise<string> {
-  const dir = path.join(STORAGE_ROOT, subDir)
+export async function saveBase64Image(
+  base64Data: string,
+  mimeType: string,
+  subDir: string,
+  userId?: number | null,
+): Promise<string> {
+  const resolved = userStorageSubDir(userId, subDir)
+  const dir = path.join(STORAGE_ROOT, resolved)
   fs.mkdirSync(dir, { recursive: true })
 
   // 从 mimeType 推断文件扩展名
@@ -81,7 +139,7 @@ export async function saveBase64Image(base64Data: string, mimeType: string, subD
   const buffer = Buffer.from(base64Data, 'base64')
   fs.writeFileSync(filePath, buffer)
 
-  return `static/${subDir}/${filename}`
+  return `static/${resolved}/${filename}`
 }
 
 export function readImageAsDataUrl(relativePath: string): string {
@@ -207,4 +265,30 @@ function extToMimeType(ext: string): string {
     '.gif': 'image/gif',
   }
   return map[ext] || 'image/png'
+}
+
+/** 参考视频 data URL 上限（方舟本地直传） */
+export const VIDEO_REFERENCE_FILE_MAX_BYTES = 20 * 1024 * 1024
+
+function videoExtToMimeType(ext: string): string {
+  const map: Record<string, string> = {
+    '.mp4': 'video/mp4',
+    '.webm': 'video/webm',
+    '.mov': 'video/quicktime',
+    '.m4v': 'video/x-m4v',
+  }
+  return map[ext] || 'video/mp4'
+}
+
+/** 将本地参考视频读为 data URL；超过上限则报错 */
+export function readVideoAsDataUrl(relativePath: string): string {
+  const filePath = getAbsolutePath(relativePath)
+  const stat = fs.statSync(filePath)
+  if (stat.size > VIDEO_REFERENCE_FILE_MAX_BYTES) {
+    throw new Error(`参考视频不能超过 ${Math.round(VIDEO_REFERENCE_FILE_MAX_BYTES / (1024 * 1024))}MB，请压缩后再试`)
+  }
+  const buffer = fs.readFileSync(filePath)
+  const ext = path.extname(filePath).toLowerCase()
+  const mimeType = videoExtToMimeType(ext)
+  return `data:${mimeType};base64,${buffer.toString('base64')}`
 }

@@ -2,10 +2,51 @@
  * Drizzle schema — 精确匹配现有 SQLite 数据库列名
  * 从 PRAGMA table_info() 逆向生成
  */
-import { sqliteTable, text, integer, real, primaryKey } from 'drizzle-orm/sqlite-core'
+import { sqliteTable, text, integer, real, primaryKey, uniqueIndex, index } from 'drizzle-orm/sqlite-core'
+
+export const users = sqliteTable('users', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  username: text('username').notNull().unique(),
+  email: text('email').notNull().unique(),
+  passwordHash: text('password_hash').notNull(),
+  role: text('role').notNull().default('user'),
+  status: text('status').notNull().default('active'),
+  emailVerifiedAt: text('email_verified_at'),
+  createdAt: text('created_at').notNull(),
+  updatedAt: text('updated_at').notNull(),
+})
+
+export const emailTokens = sqliteTable('email_tokens', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  userId: integer('user_id').notNull(),
+  type: text('type').notNull(),
+  tokenHash: text('token_hash').notNull().unique(),
+  expiresAt: text('expires_at').notNull(),
+  usedAt: text('used_at'),
+  createdAt: text('created_at').notNull(),
+})
+
+export const dramaMembers = sqliteTable('drama_members', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  dramaId: integer('drama_id').notNull(),
+  userId: integer('user_id').notNull(),
+  role: text('role').notNull(),
+  invitedBy: integer('invited_by'),
+  createdAt: text('created_at').notNull(),
+  updatedAt: text('updated_at').notNull(),
+})
+
+export const sessions = sqliteTable('sessions', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  userId: integer('user_id').notNull(),
+  tokenHash: text('token_hash').notNull().unique(),
+  expiresAt: text('expires_at').notNull(),
+  createdAt: text('created_at').notNull(),
+})
 
 export const dramas = sqliteTable('dramas', {
   id: integer('id').primaryKey({ autoIncrement: true }),
+  userId: integer('user_id'),
   title: text('title').notNull(),
   description: text('description'),
   genre: text('genre'),
@@ -138,6 +179,7 @@ export const storyboardCharacters = sqliteTable('storyboard_characters', {
 
 export const aiServiceConfigs = sqliteTable('ai_service_configs', {
   id: integer('id').primaryKey({ autoIncrement: true }),
+  userId: integer('user_id'),
   serviceType: text('service_type').notNull(),
   provider: text('provider'),
   name: text('name').notNull(),
@@ -181,6 +223,7 @@ export const aiVoices = sqliteTable('ai_voices', {
 
 export const agentConfigs = sqliteTable('agent_configs', {
   id: integer('id').primaryKey({ autoIncrement: true }),
+  userId: integer('user_id'),
   agentType: text('agent_type').notNull(),
   name: text('name').notNull(),
   description: text('description'),
@@ -197,6 +240,7 @@ export const agentConfigs = sqliteTable('agent_configs', {
 
 export const imageGenerations = sqliteTable('image_generations', {
   id: integer('id').primaryKey({ autoIncrement: true }),
+  userId: integer('user_id'),
   storyboardId: integer('storyboard_id'),
   dramaId: integer('drama_id'),
   sceneId: integer('scene_id'),
@@ -230,6 +274,7 @@ export const imageGenerations = sqliteTable('image_generations', {
 
 export const videoGenerations = sqliteTable('video_generations', {
   id: integer('id').primaryKey({ autoIncrement: true }),
+  userId: integer('user_id'),
   storyboardId: integer('storyboard_id'),
   dramaId: integer('drama_id'),
   provider: text('provider'),
@@ -241,6 +286,7 @@ export const videoGenerations = sqliteTable('video_generations', {
   firstFrameUrl: text('first_frame_url'),
   lastFrameUrl: text('last_frame_url'),
   referenceImageUrls: text('reference_image_urls'),
+  referenceVideoUrls: text('reference_video_urls'),
   duration: integer('duration'),
   fps: integer('fps'),
   resolution: text('resolution'),
@@ -263,8 +309,26 @@ export const videoGenerations = sqliteTable('video_generations', {
   deletedAt: text('deleted_at'),
 })
 
+/** 独立创作台任务（不绑定剧集分镜） */
+export const createJobs = sqliteTable('create_jobs', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  userId: integer('user_id'),
+  kind: text('kind').notNull(), // image | video（输出类型）
+  generationId: integer('generation_id'),
+  prompt: text('prompt'),
+  mediaPath: text('media_path'), // 兼容：首个附件路径
+  assetsJson: text('assets_json'), // 多附件 JSON
+  status: text('status').default('pending'),
+  resultPath: text('result_path'),
+  errorMsg: text('error_msg'),
+  createdAt: text('created_at').notNull(),
+  updatedAt: text('updated_at').notNull(),
+  completedAt: text('completed_at'),
+})
+
 export const videoMerges = sqliteTable('video_merges', {
   id: integer('id').primaryKey({ autoIncrement: true }),
+  userId: integer('user_id'),
   episodeId: integer('episode_id'),
   dramaId: integer('drama_id'),
   title: text('title'),
@@ -323,3 +387,72 @@ export const assets = sqliteTable('assets', {
   updatedAt: text('updated_at').notNull(),
   deletedAt: text('deleted_at'),
 })
+
+export const walletAccounts = sqliteTable('wallet_accounts', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  userId: integer('user_id').notNull().unique(),
+  availablePoints: integer('available_points').notNull().default(0),
+  frozenPoints: integer('frozen_points').notNull().default(0),
+  totalConsumed: integer('total_consumed').notNull().default(0),
+  createdAt: text('created_at').notNull(),
+  updatedAt: text('updated_at').notNull(),
+})
+
+export const billingPrices = sqliteTable('billing_prices', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  taskType: text('task_type').notNull(),
+  provider: text('provider').notNull(),
+  model: text('model').notNull(),
+  unitPoints: integer('unit_points').notNull(),
+  isActive: integer('is_active', { mode: 'boolean' }).notNull().default(true),
+  createdAt: text('created_at').notNull(),
+  updatedAt: text('updated_at').notNull(),
+}, (table) => ({
+  uniqTaskProviderModel: uniqueIndex('idx_billing_prices_task_provider_model').on(
+    table.taskType,
+    table.provider,
+    table.model,
+  ),
+}))
+
+export const usageRecords = sqliteTable('usage_records', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  userId: integer('user_id').notNull(),
+  dramaId: integer('drama_id'),
+  episodeId: integer('episode_id'),
+  storyboardId: integer('storyboard_id'),
+  taskType: text('task_type').notNull(),
+  provider: text('provider').notNull(),
+  model: text('model').notNull(),
+  unitPoints: integer('unit_points').notNull(),
+  quantity: integer('quantity').notNull().default(1),
+  points: integer('points').notNull(),
+  status: text('status').notNull(),
+  refType: text('ref_type'),
+  refId: integer('ref_id'),
+  idempotencyKey: text('idempotency_key').notNull().unique(),
+  errorMsg: text('error_msg'),
+  settledAt: text('settled_at'),
+  refundedAt: text('refunded_at'),
+  createdAt: text('created_at').notNull(),
+  updatedAt: text('updated_at').notNull(),
+}, (table) => ({
+  userCreatedIdx: index('idx_usage_records_user_created').on(table.userId, table.createdAt),
+  refIdx: index('idx_usage_records_ref').on(table.refType, table.refId),
+  statusIdx: index('idx_usage_records_status').on(table.status),
+}))
+
+export const walletTransactions = sqliteTable('wallet_transactions', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  userId: integer('user_id').notNull(),
+  usageRecordId: integer('usage_record_id'),
+  type: text('type').notNull(),
+  points: integer('points').notNull(),
+  availableAfter: integer('available_after').notNull(),
+  frozenAfter: integer('frozen_after').notNull(),
+  remark: text('remark'),
+  operatorId: integer('operator_id'),
+  createdAt: text('created_at').notNull(),
+}, (table) => ({
+  userCreatedIdx: index('idx_wallet_transactions_user_created').on(table.userId, table.createdAt),
+}))

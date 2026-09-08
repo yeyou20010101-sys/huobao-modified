@@ -1,7 +1,22 @@
 const BASE = '/api/v1'
 
-async function req<T = any>(method: string, path: string, body?: any): Promise<T> {
-  const opts: RequestInit = { method, headers: { 'Content-Type': 'application/json' } }
+function toQuery(params?: Record<string, string | number | undefined>) {
+  if (!params) return ''
+  const query = new URLSearchParams()
+  for (const [key, value] of Object.entries(params)) {
+    if (value === undefined || value === '') continue
+    query.set(key, String(value))
+  }
+  const text = query.toString()
+  return text ? `?${text}` : ''
+}
+
+async function req<T = unknown>(method: string, path: string, body?: unknown): Promise<T> {
+  const opts: RequestInit = {
+    method,
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
+  }
   if (body) opts.body = JSON.stringify(body)
 
   const start = performance.now()
@@ -12,9 +27,17 @@ async function req<T = any>(method: string, path: string, body?: any): Promise<T
     const json = await resp.json()
     const ms = Math.round(performance.now() - start)
 
+    if (resp.status === 401) {
+      handleUnauthorized()
+      console.log(`%c[API] %c${method} ${path} %c${resp.status} %c${ms}ms`, 'color:#888', 'color:#ef5350', 'color:#ef5350;font-weight:bold', 'color:#888', json.message || '')
+      throw new Error(json.message || '未登录')
+    }
+
     if (!resp.ok || (json.code && json.code >= 400)) {
       console.log(`%c[API] %c${method} ${path} %c${resp.status} %c${ms}ms`, 'color:#888', 'color:#ef5350', 'color:#ef5350;font-weight:bold', 'color:#888', json.message || '')
-      throw new Error(json.message || `${resp.status}`)
+      const err = new Error(json.message || `${resp.status}`) as Error & { errorCode?: string }
+      if (json.error_code) err.errorCode = json.error_code
+      throw err
     }
 
     console.log(`%c[API] %c${method} ${path} %c${resp.status} %c${ms}ms`, 'color:#888', 'color:#66bb6a', 'color:#66bb6a;font-weight:bold', 'color:#888')
@@ -28,17 +51,32 @@ async function req<T = any>(method: string, path: string, body?: any): Promise<T
   }
 }
 
+function handleUnauthorized() {
+  if (!import.meta.client) return
+  const path = window.location.pathname
+  if (path === '/login' || path === '/register' || path === '/forgot-password' || path === '/reset-password' || path === '/verify-email') return
+  try {
+    useState('auth-user', () => null).value = null
+  } catch {
+    /* ignore */
+  }
+  const redirect = encodeURIComponent(path + window.location.search)
+  navigateTo(`/login?redirect=${redirect}`)
+}
+
 export const api = {
   get: <T = any>(p: string) => req<T>('GET', p),
   post: <T = any>(p: string, b?: any) => req<T>('POST', p, b),
   put: <T = any>(p: string, b?: any) => req<T>('PUT', p, b),
+  patch: <T = any>(p: string, b?: any) => req<T>('PATCH', p, b),
   del: <T = any>(p: string) => req<T>('DELETE', p),
 }
 
 const MAX_UPLOAD_IMAGE_BYTES = 10 * 1024 * 1024
+const MAX_UPLOAD_VIDEO_BYTES = 20 * 1024 * 1024
 
 /** 上传图片到本地 static，返回相对路径 */
-export async function uploadImageFile(file: File): Promise<{ url: string; path: string }> {
+export async function uploadImageFile(file: File, dramaId?: number): Promise<{ url: string; path: string }> {
   if (!file.type.startsWith('image/')) {
     throw new Error('仅支持上传图片文件')
   }
@@ -48,12 +86,18 @@ export async function uploadImageFile(file: File): Promise<{ url: string; path: 
 
   const form = new FormData()
   form.append('file', file)
+  if (dramaId) form.append('drama_id', String(dramaId))
   const start = performance.now()
   console.log('%c[API] %cPOST %c/upload/image', 'color:#888', 'color:#4fc3f7;font-weight:bold', 'color:#ccc', file.name)
 
-  const resp = await fetch(`${BASE}/upload/image`, { method: 'POST', body: form })
+  const resp = await fetch(`${BASE}/upload/image`, { method: 'POST', body: form, credentials: 'include' })
   const json = await resp.json()
   const ms = Math.round(performance.now() - start)
+
+  if (resp.status === 401) {
+    handleUnauthorized()
+    throw new Error(json.message || '未登录')
+  }
 
   if (!resp.ok || (json.code && json.code >= 400)) {
     console.log(`%c[API] %cPOST /upload/image %c${resp.status} %c${ms}ms`, 'color:#888', 'color:#ef5350', 'color:#ef5350;font-weight:bold', 'color:#888', json.message || '')
@@ -67,8 +111,72 @@ export async function uploadImageFile(file: File): Promise<{ url: string; path: 
   return { url: data.url || `/${path}`, path }
 }
 
+/** 上传视频到本地 static，返回相对路径 */
+export async function uploadVideoFile(file: File, dramaId?: number): Promise<{ url: string; path: string }> {
+  const isVideo = file.type.startsWith('video/') || /\.(mp4|webm|mov|m4v)$/i.test(file.name)
+  if (!isVideo) {
+    throw new Error('仅支持上传视频文件')
+  }
+  if (file.size > MAX_UPLOAD_VIDEO_BYTES) {
+    throw new Error('视频大小不能超过 20MB')
+  }
+
+  const form = new FormData()
+  form.append('file', file)
+  if (dramaId) form.append('drama_id', String(dramaId))
+  const start = performance.now()
+  console.log('%c[API] %cPOST %c/upload/video', 'color:#888', 'color:#4fc3f7;font-weight:bold', 'color:#ccc', file.name)
+
+  const resp = await fetch(`${BASE}/upload/video`, { method: 'POST', body: form, credentials: 'include' })
+  const json = await resp.json()
+  const ms = Math.round(performance.now() - start)
+
+  if (resp.status === 401) {
+    handleUnauthorized()
+    throw new Error(json.message || '未登录')
+  }
+
+  if (!resp.ok || (json.code && json.code >= 400)) {
+    console.log(`%c[API] %cPOST /upload/video %c${resp.status} %c${ms}ms`, 'color:#888', 'color:#ef5350', 'color:#ef5350;font-weight:bold', 'color:#888', json.message || '')
+    throw new Error(json.message || `${resp.status}`)
+  }
+
+  console.log(`%c[API] %cPOST /upload/video %c${resp.status} %c${ms}ms`, 'color:#888', 'color:#66bb6a', 'color:#66bb6a;font-weight:bold', 'color:#888')
+  const data = json.data ?? json
+  const path = data.path || (data.url ? String(data.url).replace(/^\//, '') : '')
+  if (!path) throw new Error('上传成功但未返回文件路径')
+  return { url: data.url || `/${path}`, path }
+}
+
 export const uploadAPI = {
   image: uploadImageFile,
+  video: uploadVideoFile,
+}
+
+export const createAPI = {
+  submit: (d: {
+    prompt: string
+    output_type: 'image' | 'video'
+    config_id?: number
+    assets: Array<{ path: string; kind: 'image' | 'video'; role: string }>
+    duration?: number
+    /** @deprecated 兼容旧单附件 */
+    media_type?: 'image' | 'video'
+    media_path?: string
+  }) => api.post('/create/generate', d),
+  get: (id: number) => api.get(`/create/generate/${id}`),
+}
+
+export const authAPI = {
+  me: () => api.get('/auth/me'),
+  register: (d: { username: string; email: string; password: string }) => api.post('/auth/register', d),
+  login: (d: { identifier: string; password: string }) => api.post('/auth/login', d),
+  logout: () => api.post('/auth/logout'),
+  changePassword: (d: { old_password: string; new_password: string }) => api.post('/auth/change-password', d),
+  forgotPassword: (d: { email: string }) => api.post('/auth/forgot-password', d),
+  resetPassword: (d: { token: string; password: string }) => api.post('/auth/reset-password', d),
+  verifyEmail: (d: { token: string }) => api.post('/auth/verify-email', d),
+  sendVerification: () => api.post('/auth/send-verification', {}),
 }
 
 export const dramaAPI = {
@@ -77,11 +185,39 @@ export const dramaAPI = {
   create: (data: any) => api.post('/dramas', data),
   update: (id: number, data: any) => api.put(`/dramas/${id}`, data),
   del: (id: number) => api.del(`/dramas/${id}`),
+  members: (id: number) => api.get(`/dramas/${id}/members`),
+  inviteMember: (id: number, data: { identifier: string; role: string }) => api.post(`/dramas/${id}/members`, data),
+  updateMember: (id: number, userId: number, data: { role: string }) => api.patch(`/dramas/${id}/members/${userId}`, data),
+  removeMember: (id: number, userId: number) => api.del(`/dramas/${id}/members/${userId}`),
+}
+
+export const adminAPI = {
+  users: () => api.get('/admin/users'),
+  patchUser: (id: number, data: { role?: string; status?: string }) => api.patch(`/admin/users/${id}`, data),
+  dramas: () => api.get('/admin/dramas'),
+  delDrama: (id: number) => api.del(`/admin/dramas/${id}`),
+  aiConfigs: () => api.get('/admin/ai-configs'),
+  claimOrphans: (userId: number) => api.post('/admin/claim-orphans', { user_id: userId }),
+  wallets: (q?: string) => api.get(`/admin/wallets${q ? `?q=${encodeURIComponent(q)}` : ''}`),
+  wallet: (userId: number) => api.get(`/admin/wallets/${userId}`),
+  adjustWallet: (userId: number, data: { delta: number; remark: string }) => api.post(`/admin/wallets/${userId}/adjust`, data),
+  prices: () => api.get('/admin/prices'),
+  createPrice: (data: Record<string, unknown>) => api.post('/admin/prices', data),
+  patchPrice: (id: number, data: Record<string, unknown>) => api.patch(`/admin/prices/${id}`, data),
+  usage: (params?: Record<string, string | number | undefined>) => api.get(`/admin/usage${toQuery(params)}`),
+  transactions: (params?: Record<string, string | number | undefined>) => api.get(`/admin/transactions${toQuery(params)}`),
+}
+
+export const billingAPI = {
+  summary: () => api.get('/billing/summary'),
+  usage: (params?: Record<string, string | number | undefined>) => api.get(`/billing/usage${toQuery(params)}`),
+  transactions: (params?: Record<string, string | number | undefined>) => api.get(`/billing/transactions${toQuery(params)}`),
 }
 
 export const episodeAPI = {
   create: (data: any) => api.post('/episodes', data),
   update: (id: number, data: any) => api.put(`/episodes/${id}`, data),
+  del: (id: number) => api.del(`/episodes/${id}`),
   characters: (id: number) => api.get(`/episodes/${id}/characters`),
   scenes: (id: number) => api.get(`/episodes/${id}/scenes`),
   storyboards: (id: number) => api.get(`/episodes/${id}/storyboards`),
@@ -96,6 +232,7 @@ export const storyboardAPI = {
 }
 
 export const characterAPI = {
+  create: (data: Record<string, unknown>) => api.post('/characters', data),
   update: (id: number, data: any) => api.put(`/characters/${id}`, data),
   voiceSample: (id: number, episodeId: number) => api.post(`/characters/${id}/generate-voice-sample`, { episode_id: episodeId }),
   generateImage: (id: number, episodeId: number) => api.post(`/characters/${id}/generate-image`, { episode_id: episodeId }),
@@ -104,6 +241,7 @@ export const characterAPI = {
 }
 
 export const sceneAPI = {
+  create: (data: Record<string, unknown>) => api.post('/scenes', data),
   update: (id: number, data: Record<string, unknown>) => api.put(`/scenes/${id}`, data),
   generateImage: (id: number, episodeId: number) => api.post(`/scenes/${id}/generate-image`, { episode_id: episodeId }),
   refineImage: (id: number, episodeId: number) => api.post(`/scenes/${id}/refine-image`, { episode_id: episodeId }),

@@ -5,6 +5,8 @@ import { success, notFound, created, badRequest, now } from '../utils/response.j
 import { toSnakeCase } from '../utils/transform.js'
 import { joinProviderUrl } from '../services/adapters/url.js'
 import { redactUrl, logTaskError, logTaskProgress, logTaskSuccess } from '../utils/task-logger.js'
+import { requireUser } from '../middleware/auth.js'
+import { getOwnedAiConfig } from '../utils/ownership.js'
 
 const app = new Hono()
 
@@ -212,8 +214,9 @@ function buildProbe(serviceType: string, provider: string, baseUrl: string, mode
 
 // GET /ai-configs?service_type=text
 app.get('/', async (c) => {
+  const user = requireUser(c)
   const serviceType = c.req.query('service_type')
-  let rows = db.select().from(schema.aiServiceConfigs).all()
+  let rows = db.select().from(schema.aiServiceConfigs).all().filter(r => r.userId === user.id)
   if (serviceType) rows = rows.filter(r => r.serviceType === serviceType)
 
   const parsed = rows.map(r => ({
@@ -225,6 +228,7 @@ app.get('/', async (c) => {
 
 // POST /ai-configs
 app.post('/', async (c) => {
+  const user = requireUser(c)
   const body = await c.req.json()
   const ts = now()
 
@@ -234,6 +238,7 @@ app.post('/', async (c) => {
   }
 
   const res = db.insert(schema.aiServiceConfigs).values({
+    userId: user.id,
     serviceType: body.service_type,
     provider: body.provider,
     name: body.name || `${body.provider}-${body.service_type}`,
@@ -258,6 +263,7 @@ app.post('/', async (c) => {
 
 // POST /ai-configs/huobao-preset
 app.post('/huobao-preset', async (c) => {
+  const user = requireUser(c)
   const body = await c.req.json()
   const aliApiKey = resolvePresetApiKey(body, 'ali')
   const volcengineApiKey = resolvePresetApiKey(body, 'volcengine')
@@ -273,13 +279,14 @@ app.post('/huobao-preset', async (c) => {
       return badRequest(c, `${preset.serviceType} service requires a valid API key`)
     }
 
-    const [existing] = db.select().from(schema.aiServiceConfigs).where(eq(schema.aiServiceConfigs.serviceType, preset.serviceType)).all()
-      .filter(row => row.provider === preset.provider)
+    const [existing] = db.select().from(schema.aiServiceConfigs).all()
+      .filter(row => row.userId === user.id && row.serviceType === preset.serviceType && row.provider === preset.provider)
 
     const values = {
+      userId: user.id,
       serviceType: preset.serviceType,
       provider: preset.provider,
-      name: `火宝默认${preset.label}服务`,
+      name: `鲸鱼默认${preset.label}服务`,
       baseUrl: preset.baseUrl,
       apiKey,
       model: JSON.stringify([preset.model]),
@@ -299,7 +306,8 @@ app.post('/huobao-preset', async (c) => {
   }
 
   for (const agent of HUOBAO_AGENT_DEFAULTS) {
-    const [existing] = db.select().from(schema.agentConfigs).where(eq(schema.agentConfigs.agentType, agent.agentType)).all()
+    const [existing] = db.select().from(schema.agentConfigs).all()
+      .filter(row => row.userId === user.id && row.agentType === agent.agentType)
     const values = {
       name: agent.name,
       model: HUOBAO_AGENT_MODEL,
@@ -311,6 +319,7 @@ app.post('/huobao-preset', async (c) => {
       db.update(schema.agentConfigs).set(values).where(eq(schema.agentConfigs.id, existing.id)).run()
     } else {
       db.insert(schema.agentConfigs).values({
+        userId: user.id,
         agentType: agent.agentType,
         description: '',
         model: HUOBAO_AGENT_MODEL,
@@ -326,11 +335,15 @@ app.post('/huobao-preset', async (c) => {
     }
   }
 
-  const configs = db.select().from(schema.aiServiceConfigs).all().map(row => ({
+  const configs = db.select().from(schema.aiServiceConfigs).all()
+    .filter(row => row.userId === user.id)
+    .map(row => ({
     ...toSnakeCase(row),
     model: row.model ? JSON.parse(row.model) : [],
   }))
-  const agents = db.select().from(schema.agentConfigs).all().map(row => toSnakeCase(row))
+  const agents = db.select().from(schema.agentConfigs).all()
+    .filter(row => row.userId === user.id)
+    .map(row => toSnakeCase(row))
 
   logTaskSuccess('AIConfig', 'huobao-preset-applied', {
     serviceCount: HUOBAO_PRESET_SERVICES.length,
@@ -415,8 +428,9 @@ app.post('/test', async (c) => {
 
 // GET /ai-configs/:id
 app.get('/:id', async (c) => {
+  const user = requireUser(c)
   const id = Number(c.req.param('id'))
-  const [row] = db.select().from(schema.aiServiceConfigs).where(eq(schema.aiServiceConfigs.id, id)).all()
+  const row = getOwnedAiConfig(id, user.id)
   if (!row) return notFound(c)
   return success(c, {
     ...toSnakeCase(row),
@@ -426,7 +440,9 @@ app.get('/:id', async (c) => {
 
 // PUT /ai-configs/:id
 app.put('/:id', async (c) => {
+  const user = requireUser(c)
   const id = Number(c.req.param('id'))
+  if (!getOwnedAiConfig(id, user.id)) return notFound(c)
   const body = await c.req.json()
   const updates: Record<string, any> = { updatedAt: now() }
 
@@ -445,7 +461,9 @@ app.put('/:id', async (c) => {
 
 // DELETE /ai-configs/:id
 app.delete('/:id', async (c) => {
+  const user = requireUser(c)
   const id = Number(c.req.param('id'))
+  if (!getOwnedAiConfig(id, user.id)) return notFound(c)
   db.delete(schema.aiServiceConfigs).where(eq(schema.aiServiceConfigs.id, id)).run()
   return success(c)
 })

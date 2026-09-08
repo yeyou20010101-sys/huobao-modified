@@ -1,36 +1,40 @@
 import { Hono } from 'hono'
 import { eq, isNull, and } from 'drizzle-orm'
 import { db, schema } from '../db/index.js'
-import { success, badRequest, now } from '../utils/response.js'
+import { success, badRequest, notFound, now } from '../utils/response.js'
 import { toSnakeCaseArray, toSnakeCase } from '../utils/transform.js'
+import { requireUser } from '../middleware/auth.js'
+import { getOwnedAgentConfig } from '../utils/ownership.js'
 
 const app = new Hono()
 
 // GET /agent-configs
 app.get('/', async (c) => {
+  const user = requireUser(c)
   const rows = db.select().from(schema.agentConfigs)
-    .where(isNull(schema.agentConfigs.deletedAt)).all()
+    .where(and(eq(schema.agentConfigs.userId, user.id), isNull(schema.agentConfigs.deletedAt))).all()
   return success(c, toSnakeCaseArray(rows))
 })
 
 // GET /agent-configs/:id
 app.get('/:id', async (c) => {
+  const user = requireUser(c)
   const id = Number(c.req.param('id'))
-  const [row] = db.select().from(schema.agentConfigs)
-    .where(eq(schema.agentConfigs.id, id)).all()
-  if (!row) return badRequest(c, 'Not found')
+  const row = getOwnedAgentConfig(id, user.id)
+  if (!row) return notFound(c)
   return success(c, toSnakeCase(row))
 })
 
-// POST /agent-configs (upsert by agent_type)
+// POST /agent-configs (upsert by agent_type + user)
 app.post('/', async (c) => {
+  const user = requireUser(c)
   const body = await c.req.json()
   if (!body.agent_type) return badRequest(c, 'agent_type required')
   const ts = now()
 
   // Check if exists (including soft-deleted)
   const [existing] = db.select().from(schema.agentConfigs)
-    .where(eq(schema.agentConfigs.agentType, body.agent_type)).all()
+    .where(and(eq(schema.agentConfigs.agentType, body.agent_type), eq(schema.agentConfigs.userId, user.id))).all()
 
   if (existing) {
     // Update existing
@@ -50,6 +54,7 @@ app.post('/', async (c) => {
   }
 
   const res = db.insert(schema.agentConfigs).values({
+    userId: user.id,
     agentType: body.agent_type,
     name: body.name || '',
     description: body.description || '',
@@ -69,7 +74,9 @@ app.post('/', async (c) => {
 
 // PUT /agent-configs/:id
 app.put('/:id', async (c) => {
+  const user = requireUser(c)
   const id = Number(c.req.param('id'))
+  if (!getOwnedAgentConfig(id, user.id)) return notFound(c)
   const body = await c.req.json()
   const updates: Record<string, any> = { updatedAt: now() }
 
@@ -89,7 +96,9 @@ app.put('/:id', async (c) => {
 
 // DELETE /agent-configs/:id
 app.delete('/:id', async (c) => {
+  const user = requireUser(c)
   const id = Number(c.req.param('id'))
+  if (!getOwnedAgentConfig(id, user.id)) return notFound(c)
   db.update(schema.agentConfigs).set({ deletedAt: now() }).where(eq(schema.agentConfigs.id, id)).run()
   return success(c)
 })

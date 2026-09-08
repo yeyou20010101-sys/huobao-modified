@@ -9,6 +9,7 @@ import { success, badRequest } from '../utils/response.js'
 import { downloadFile } from '../utils/storage.js'
 import { ViduVideoAdapter } from '../services/adapters/vidu-video'
 import { logTaskError, logTaskProgress, logTaskSuccess, logTaskWarn } from '../utils/task-logger.js'
+import { refundTaskByRef, settleTaskByRef } from '../services/billing.js'
 
 const app = new Hono()
 
@@ -44,7 +45,7 @@ app.post('/vidu', async (c) => {
 
   if (state === 'success' && video_url) {
     try {
-      const localPath = await downloadFile(video_url, 'videos')
+      const localPath = await downloadFile(video_url, 'videos', record.userId)
       db.update(schema.videoGenerations)
         .set({
           videoUrl: video_url,
@@ -69,6 +70,7 @@ app.post('/vidu', async (c) => {
         storyboardId: record.storyboardId,
         localPath,
       })
+      settleTaskByRef('video_generations', record.id)
       return success(c, { message: 'Video updated successfully' })
     } catch (err: any) {
       logTaskError('Webhook', 'vidu-download-failed', { taskId: task_id, generationId: record.id, error: err.message })
@@ -76,6 +78,7 @@ app.post('/vidu', async (c) => {
         .set({ status: 'failed', errorMsg: `Webhook download failed: ${err.message}` })
         .where(eq(schema.videoGenerations.id, record.id))
         .run()
+      refundTaskByRef('video_generations', record.id, err.message)
       return badRequest(c, err.message)
     }
   }
@@ -89,6 +92,7 @@ app.post('/vidu', async (c) => {
       })
       .where(eq(schema.videoGenerations.id, record.id))
       .run()
+    refundTaskByRef('video_generations', record.id, error || 'Vidu generation failed')
     return success(c, { message: 'Error recorded' })
   }
 

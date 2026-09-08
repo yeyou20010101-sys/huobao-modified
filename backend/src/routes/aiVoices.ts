@@ -9,6 +9,7 @@ import { db, schema } from '../db/index.js'
 import { success, badRequest, now } from '../utils/response.js'
 import { joinProviderUrl } from '../services/adapters/url.js'
 import { ALI_TTS_VOICES, VOLCENGINE_TTS_VOICES } from '../constants/tts-voices.js'
+import { requireUser } from '../middleware/auth.js'
 
 const app = new Hono()
 
@@ -49,6 +50,7 @@ app.get('/', async (c) => {
 
 // POST /ai-voices/sync  body: { provider?: string }
 app.post('/sync', async (c) => {
+  const user = requireUser(c)
   const body = await c.req.json().catch(() => ({}))
   const provider = String(body?.provider || 'minimax').toLowerCase()
 
@@ -69,7 +71,7 @@ app.post('/sync', async (c) => {
   const rows = db.select().from(schema.aiServiceConfigs)
     .where(eq(schema.aiServiceConfigs.serviceType, 'audio'))
     .all()
-    .filter(r => r.isActive && r.provider === 'minimax')
+    .filter(r => r.isActive && r.provider === 'minimax' && r.userId === user.id)
 
   if (rows.length === 0) {
     return badRequest(c, 'No active minimax audio config found')

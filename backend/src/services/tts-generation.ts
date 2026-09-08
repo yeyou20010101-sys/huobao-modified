@@ -4,15 +4,14 @@
  */
 import fs from 'fs'
 import path from 'path'
-import { fileURLToPath } from 'url'
 import { v4 as uuid } from 'uuid'
 import { getAudioConfigById } from './ai.js'
 import { getTTSAdapter } from './adapters/registry.js'
 import type { TTSParsedAudio } from './adapters/types.js'
 import { logTaskError, logTaskPayload, logTaskProgress, logTaskStart, logTaskSuccess, redactUrl } from '../utils/task-logger.js'
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url))
-const STORAGE_ROOT = process.env.STORAGE_PATH || path.resolve(__dirname, '../../../data/static')
+import { userStorageAbsDir, toStaticRelative } from '../utils/storage.js'
+import { randomUUID } from 'crypto'
+import { beginTask, refundTask, settleTask } from './billing.js'
 
 interface TTSParams {
   text: string
@@ -21,6 +20,11 @@ interface TTSParams {
   speed?: number
   emotion?: string
   configId?: number | null
+  userId: number
+  storageUserId?: number
+  dramaId?: number | null
+  episodeId?: number | null
+  storyboardId?: number | null
 }
 
 async function audioBufferFromParsed(parsed: TTSParsedAudio): Promise<Buffer> {
@@ -45,11 +49,24 @@ async function audioBufferFromParsed(parsed: TTSParsedAudio): Promise<Buffer> {
  * 生成 TTS 音频，返回本地文件路径
  */
 export async function generateTTS(params: TTSParams): Promise<string> {
-  const config = getAudioConfigById(params.configId)
+  const config = getAudioConfigById(params.configId, params.userId)
   const adapter = getTTSAdapter(config.provider)
   const model = params.model || config.model
+  const hold = beginTask({
+    userId: params.userId,
+    taskType: 'tts',
+    provider: config.provider,
+    model,
+    dramaId: params.dramaId ?? null,
+    episodeId: params.episodeId ?? null,
+    storyboardId: params.storyboardId ?? null,
+    refType: params.storyboardId ? 'storyboards_tts' : 'tts',
+    refId: params.storyboardId ?? null,
+    idempotencyKey: `tts:${randomUUID()}`,
+  })
 
-  logTaskStart('AudioTask', 'tts-generate', {
+  try {
+    logTaskStart('AudioTask', 'tts-generate', {
     provider: config.provider,
     voice: params.voice,
     model,
@@ -104,13 +121,16 @@ export async function generateTTS(params: TTSParams): Promise<string> {
   const parsed = adapter.parseResponse(result)
   const buffer = await audioBufferFromParsed(parsed)
 
-  const audioDir = path.join(STORAGE_ROOT, 'audio')
+  const audioUserId = params.storageUserId && params.storageUserId > 0
+    ? params.storageUserId
+    : params.userId
+  const audioDir = userStorageAbsDir(audioUserId, 'audio')
   fs.mkdirSync(audioDir, { recursive: true })
   const filename = `${uuid()}.${parsed.format || 'mp3'}`
   const filePath = path.join(audioDir, filename)
   fs.writeFileSync(filePath, buffer)
 
-  const relativePath = `static/audio/${filename}`
+  const relativePath = toStaticRelative(audioUserId, 'audio', filename)
   logTaskSuccess('AudioTask', 'tts-saved', {
     provider: config.provider,
     voice: params.voice,
@@ -118,13 +138,24 @@ export async function generateTTS(params: TTSParams): Promise<string> {
     bytes: buffer.length,
     audioMs: parsed.audioLength,
   })
-  return relativePath
+    settleTask(hold.id)
+    return relativePath
+  } catch (err) {
+    refundTask(hold.id, err instanceof Error ? err.message : 'TTS 失败')
+    throw err
+  }
 }
 
 /**
  * 为角色生成试听音频
  */
-export async function generateVoiceSample(characterName: string, voiceId: string, configId?: number | null): Promise<string> {
+export async function generateVoiceSample(
+  characterName: string,
+  voiceId: string,
+  configId: number | null | undefined,
+  userId: number,
+  storageUserId?: number,
+): Promise<string> {
   const sampleText = `你好，我是${characterName}。很高兴认识你，这是我的声音试听。`
-  return generateTTS({ text: sampleText, voice: voiceId, configId })
+  return generateTTS({ text: sampleText, voice: voiceId, configId, userId, storageUserId })
 }
