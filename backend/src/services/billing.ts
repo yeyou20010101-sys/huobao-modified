@@ -38,6 +38,7 @@ export interface BeginTaskParams {
 export type UsageRecord = typeof schema.usageRecords.$inferSelect
 export type WalletAccount = typeof schema.walletAccounts.$inferSelect
 export type BillingPrice = typeof schema.billingPrices.$inferSelect
+export type RechargeOrder = typeof schema.rechargeOrders.$inferSelect
 
 function asInt(value: number): number {
   const n = Math.trunc(Number(value))
@@ -103,6 +104,7 @@ function isAdminUser(userId: number): boolean {
 function insertTransaction(params: {
   userId: number
   usageRecordId?: number | null
+  rechargeOrderId?: number | null
   type: string
   points: number
   availableAfter: number
@@ -114,6 +116,7 @@ function insertTransaction(params: {
   db.insert(schema.walletTransactions).values({
     userId: params.userId,
     usageRecordId: params.usageRecordId ?? null,
+    rechargeOrderId: params.rechargeOrderId ?? null,
     type: params.type,
     points: params.points,
     availableAfter: params.availableAfter,
@@ -122,6 +125,71 @@ function insertTransaction(params: {
     operatorId: params.operatorId ?? null,
     createdAt: params.createdAt,
   }).run()
+}
+
+/**
+ * 支付订单到账：订单状态、钱包余额和审计流水在同一事务内提交。
+ * 重复通知会直接返回已支付订单，不会重复增加点数。
+ */
+export function creditRechargeOrder(
+  orderId: number,
+  alipayTradeNo: string,
+  notifiedAt = now(),
+): RechargeOrder {
+  return sqlite.transaction(() => {
+    const [order] = db.select().from(schema.rechargeOrders)
+      .where(eq(schema.rechargeOrders.id, orderId))
+      .all()
+    if (!order) throw new Error('充值订单不存在')
+    if (order.status === 'paid') return order
+    if (order.status !== 'pending') {
+      throw new Error(`充值订单状态不可到账：${order.status}`)
+    }
+
+    ensureWallet(order.userId)
+    const paidAt = now()
+    const updated = sqlite.prepare(`
+      UPDATE recharge_orders
+      SET status = 'paid',
+          alipay_trade_no = ?,
+          notified_at = ?,
+          paid_at = ?,
+          updated_at = ?,
+          error_msg = NULL
+      WHERE id = ? AND status = 'pending'
+    `).run(alipayTradeNo, notifiedAt, paidAt, paidAt, order.id)
+    if (updated.changes !== 1) {
+      const [latest] = db.select().from(schema.rechargeOrders)
+        .where(eq(schema.rechargeOrders.id, order.id))
+        .all()
+      if (latest?.status === 'paid') return latest
+      throw new Error('充值订单状态已变化，请重新查询')
+    }
+
+    sqlite.prepare(`
+      UPDATE wallet_accounts
+      SET available_points = available_points + ?,
+          updated_at = ?
+      WHERE user_id = ?
+    `).run(order.totalPoints, paidAt, order.userId)
+
+    const wallet = readWalletRow(order.userId)
+    insertTransaction({
+      userId: order.userId,
+      rechargeOrderId: order.id,
+      type: 'credit',
+      points: order.totalPoints,
+      availableAfter: wallet.availablePoints,
+      frozenAfter: wallet.frozenPoints,
+      remark: `支付宝充值 ${order.orderNo}（${order.packageName}）`,
+      createdAt: paidAt,
+    })
+
+    const [result] = db.select().from(schema.rechargeOrders)
+      .where(eq(schema.rechargeOrders.id, order.id))
+      .all()
+    return result
+  })()
 }
 
 function readWalletRow(userId: number): WalletAccount {

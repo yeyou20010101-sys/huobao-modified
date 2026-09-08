@@ -10,7 +10,8 @@
     "db:generate": "drizzle-kit generate",
     "db:push": "drizzle-kit push",
     "typecheck": "tsc --noEmit",
-    "create-admin": "tsx scripts/create-admin.ts"
+    "create-admin": "tsx scripts/create-admin.ts",
+    "verify:recharge": "tsx scripts/verify-recharge.ts"
   },
   "keywords": [],
   "author": "",
@@ -21,6 +22,7 @@
     "@ai-sdk/openai": "^3.0.48",
     "@hono/node-server": "^1.19.11",
     "@mastra/core": "^1.17.0",
+    "alipay-sdk": "^4.14.0",
     "better-sqlite3": "^12.8.0",
     "drizzle-orm": "^0.45.1",
     "fluent-ffmpeg": "^2.1.3",

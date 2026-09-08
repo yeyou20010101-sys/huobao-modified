@@ -31,10 +31,21 @@ export type MailConfig = {
   from: string
 }
 
+export type AlipayConfig = {
+  appId: string
+  privateKey: string
+  alipayPublicKey: string
+  sellerId: string
+  notifyUrl: string
+  gateway: string
+  keyType: 'PKCS1' | 'PKCS8'
+}
+
 export type AppRuntimeConfig = {
   debug: boolean
   appPublicUrl: string
   mail: MailConfig
+  alipay: AlipayConfig
 }
 
 let cached: AppRuntimeConfig | null = null
@@ -52,6 +63,11 @@ function envFlag(name: string, fallback: boolean): boolean {
   const value = process.env[name]
   if (value == null || value === '') return fallback
   return value === '1' || value.toLowerCase() === 'true'
+}
+
+/** 环境变量中的 PEM 常以 \n 转义保存，读取时还原换行 */
+function pemFromEnv(name: string): string {
+  return String(process.env[name] || '').replace(/\\n/g, '\n').trim()
 }
 
 /** 读取 YAML + 环境变量覆盖；进程内缓存 */
@@ -72,6 +88,15 @@ export function getAppConfig(): AppRuntimeConfig {
       smtpPass: process.env.SMTP_PASS || mail.smtp_pass || '',
       from: process.env.SMTP_FROM || mail.from || '鲸鱼短剧 <noreply@example.com>',
     },
+    alipay: {
+      appId: String(process.env.ALIPAY_APP_ID || '').trim(),
+      privateKey: pemFromEnv('ALIPAY_PRIVATE_KEY'),
+      alipayPublicKey: pemFromEnv('ALIPAY_PUBLIC_KEY'),
+      sellerId: String(process.env.ALIPAY_SELLER_ID || '').trim(),
+      notifyUrl: String(process.env.ALIPAY_NOTIFY_URL || '').trim(),
+      gateway: String(process.env.ALIPAY_GATEWAY || 'https://openapi.alipay.com/gateway.do').trim(),
+      keyType: process.env.ALIPAY_KEY_TYPE === 'PKCS8' ? 'PKCS8' : 'PKCS1',
+    },
   }
   return cached
 }
@@ -79,4 +104,15 @@ export function getAppConfig(): AppRuntimeConfig {
 export function isMailConfigured(): boolean {
   const mail = getAppConfig().mail
   return Boolean(mail.smtpHost && mail.smtpUser && mail.smtpPass)
+}
+
+export function isAlipayConfigured(): boolean {
+  const alipay = getAppConfig().alipay
+  return Boolean(
+    alipay.appId
+    && alipay.privateKey
+    && alipay.alipayPublicKey
+    && alipay.sellerId
+    && alipay.notifyUrl,
+  )
 }

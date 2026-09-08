@@ -5,9 +5,12 @@
         <h1 class="page-title">用量与余额</h1>
         <p class="page-desc">查看可用点数、冻结中的任务和历史消耗。</p>
       </div>
-      <button class="btn" type="button" :disabled="loading" @click="reload">
-        {{ loading ? '刷新中…' : '刷新' }}
-      </button>
+      <div class="head-actions">
+        <button class="btn btn-primary" type="button" @click="scrollToRecharge">充值</button>
+        <button class="btn" type="button" :disabled="loading" @click="reload">
+          {{ loading ? '刷新中…' : '刷新' }}
+        </button>
+      </div>
     </div>
 
     <p v-if="error" class="auth-error" role="alert">{{ error }}</p>
@@ -25,6 +28,70 @@
         <h2 class="stat-label">累计消耗</h2>
         <p class="stat-value">{{ totalConsumed }} <span>点</span></p>
       </article>
+    </section>
+
+    <section ref="rechargeSection" class="card panel">
+      <div class="panel-head">
+        <div>
+          <h2 class="panel-title">支付宝充值</h2>
+          <p class="panel-desc">选择固定套餐后，使用支付宝扫描二维码完成支付。</p>
+        </div>
+      </div>
+      <p v-if="!paymentReady" class="payment-warning" role="status">
+        支付宝支付暂未配置，请联系管理员。
+      </p>
+      <div v-else-if="!rechargePackages.length" class="empty-card">暂无可用充值套餐</div>
+      <div v-else class="package-grid">
+        <article v-for="item in rechargePackages" :key="item.id" class="package-card">
+          <h3>{{ item.name }}</h3>
+          <p class="package-points">{{ item.total_points }} <span>点</span></p>
+          <p v-if="item.bonus_points" class="package-bonus">
+            含赠送 {{ item.bonus_points }} 点
+          </p>
+          <p class="package-price">¥ {{ formatMoney(item.price_cents) }}</p>
+          <button
+            class="btn btn-primary package-button"
+            type="button"
+            :disabled="creatingPackageId !== null"
+            @click="createRechargeOrder(item)"
+          >
+            {{ creatingPackageId === item.id ? '创建订单中…' : '立即充值' }}
+          </button>
+        </article>
+      </div>
+    </section>
+
+    <section class="card panel">
+      <div class="panel-head">
+        <h2 class="panel-title">充值订单</h2>
+      </div>
+      <div class="table-wrap">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>创建时间</th>
+              <th>订单号</th>
+              <th>套餐</th>
+              <th>金额</th>
+              <th>到账点数</th>
+              <th>状态</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-if="!rechargeOrders.length">
+              <td colspan="6" class="empty">暂无充值订单</td>
+            </tr>
+            <tr v-for="order in rechargeOrders" :key="order.id">
+              <td>{{ formatTime(order.created_at) }}</td>
+              <td>{{ order.order_no }}</td>
+              <td>{{ order.package_name }}</td>
+              <td>¥ {{ formatMoney(order.amount_cents) }}</td>
+              <td>{{ order.total_points }}</td>
+              <td>{{ rechargeStatusLabel(order.status) }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
     </section>
 
     <section class="card panel">
@@ -127,11 +194,61 @@
         <button class="btn btn-ghost" type="button" :disabled="txPage * pageSize >= txTotal" @click="txPage += 1">下一页</button>
       </div>
     </section>
+
+    <div v-if="activeOrder" class="payment-overlay" @click.self="closePayment">
+      <section class="payment-dialog card" role="dialog" aria-modal="true" aria-labelledby="payment-title">
+        <button class="payment-close" type="button" aria-label="关闭支付窗口" @click="closePayment">×</button>
+        <h2 id="payment-title">支付宝扫码支付</h2>
+        <p class="payment-summary">
+          {{ activeOrder.package_name }} · ¥ {{ formatMoney(activeOrder.amount_cents) }} ·
+          到账 {{ activeOrder.total_points }} 点
+        </p>
+        <div class="qr-frame">
+          <img v-if="qrDataUrl" :src="qrDataUrl" alt="支付宝付款二维码" />
+          <p v-else>二维码生成中…</p>
+        </div>
+        <p v-if="activeOrder.status === 'pending'" class="payment-countdown">
+          二维码将在 {{ countdownText }} 后失效
+        </p>
+        <p v-else class="payment-result" role="status">
+          {{ rechargeStatusLabel(activeOrder.status) }}
+        </p>
+        <p v-if="paymentError" class="auth-error" role="alert">{{ paymentError }}</p>
+        <div class="payment-actions">
+          <button class="btn btn-primary" type="button" :disabled="checkingOrder" @click="checkActiveOrder">
+            {{ checkingOrder ? '查询中…' : '我已支付，立即查询' }}
+          </button>
+          <button class="btn" type="button" @click="closePayment">关闭</button>
+        </div>
+      </section>
+    </div>
   </div>
 </template>
 
-<script setup>
-import { billingAPI } from '~/composables/useApi'
+<script setup lang="ts">
+import QRCode from 'qrcode'
+import { billingAPI, type RechargeOrder, type RechargePackage } from '~/composables/useApi'
+
+interface UsageItem {
+  id: number
+  created_at: string
+  task_type: string
+  provider: string
+  model: string
+  drama_id?: number | null
+  points: number
+  status: string
+}
+
+interface TransactionItem {
+  id: number
+  created_at: string
+  type: string
+  points: number
+  available_after: number
+  frozen_after: number
+  remark?: string | null
+}
 
 const { availablePoints, frozenPoints, totalConsumed, refresh } = useWallet()
 const loading = ref(false)
@@ -155,18 +272,39 @@ const usageFilter = reactive({
 })
 const usagePage = ref(1)
 const usageTotal = ref(0)
-const usageItems = ref([])
+const usageItems = ref<UsageItem[]>([])
 
 const txPage = ref(1)
 const txTotal = ref(0)
-const txItems = ref([])
+const txItems = ref<TransactionItem[]>([])
 
-function taskLabel(type) {
+const paymentReady = ref(false)
+const rechargePackages = ref<RechargePackage[]>([])
+const rechargeOrders = ref<RechargeOrder[]>([])
+const creatingPackageId = ref<number | null>(null)
+const activeOrder = ref<RechargeOrder | null>(null)
+const qrDataUrl = ref('')
+const checkingOrder = ref(false)
+const paymentError = ref('')
+const rechargeSection = ref<HTMLElement | null>(null)
+const currentTime = ref(Date.now())
+let pollingTimer: ReturnType<typeof setInterval> | null = null
+let pollingTick = 0
+
+const countdownText = computed(() => {
+  if (!activeOrder.value) return '00:00'
+  const seconds = Math.max(0, Math.ceil((Date.parse(activeOrder.value.expires_at) - currentTime.value) / 1000))
+  const minutes = Math.floor(seconds / 60)
+  const rest = seconds % 60
+  return `${String(minutes).padStart(2, '0')}:${String(rest).padStart(2, '0')}`
+})
+
+function taskLabel(type: string) {
   return taskTypes.find(item => item.value === type)?.label || type
 }
 
-function statusLabel(status) {
-  const map = {
+function statusLabel(status: string) {
+  const map: Record<string, string> = {
     frozen: '冻结中',
     settled: '已结算',
     refunded: '已退款',
@@ -175,8 +313,8 @@ function statusLabel(status) {
   return map[status] || status
 }
 
-function txLabel(type) {
-  const map = {
+function txLabel(type: string) {
+  const map: Record<string, string> = {
     credit: '充值',
     debit: '扣减',
     freeze: '冻结',
@@ -186,18 +324,36 @@ function txLabel(type) {
   return map[type] || type
 }
 
-function toIso(value) {
+function rechargeStatusLabel(status: RechargeOrder['status']) {
+  const map: Record<RechargeOrder['status'], string> = {
+    pending: '待支付',
+    paid: '支付成功，点数已到账',
+    closed: '已关闭',
+    failed: '创建失败',
+  }
+  return map[status]
+}
+
+function formatMoney(cents: number) {
+  return (cents / 100).toFixed(2)
+}
+
+function toIso(value: string) {
   if (!value) return undefined
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) return undefined
   return date.toISOString()
 }
 
-function formatTime(value) {
+function formatTime(value?: string | null) {
   if (!value) return '—'
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) return value
   return date.toLocaleString('zh-CN', { hour12: false })
+}
+
+function scrollToRecharge() {
+  rechargeSection.value?.scrollIntoView({ behavior: 'smooth', block: 'start' })
 }
 
 async function loadUsage() {
@@ -222,11 +378,84 @@ async function loadTx() {
   txTotal.value = data.total || 0
 }
 
+async function loadRecharge() {
+  const [packageResult, orderResult] = await Promise.all([
+    billingAPI.rechargePackages(),
+    billingAPI.rechargeOrders({ page: 1, page_size: 20 }),
+  ])
+  paymentReady.value = packageResult.payment_ready
+  rechargePackages.value = packageResult.items
+  rechargeOrders.value = orderResult.items
+}
+
+function stopPolling() {
+  if (pollingTimer) clearInterval(pollingTimer)
+  pollingTimer = null
+  pollingTick = 0
+}
+
+function startPolling() {
+  stopPolling()
+  pollingTimer = setInterval(() => {
+    currentTime.value = Date.now()
+    pollingTick += 1
+    if (pollingTick % 2 === 0 && activeOrder.value?.status === 'pending') {
+      checkActiveOrder()
+    }
+  }, 1000)
+}
+
+async function createRechargeOrder(item: RechargePackage) {
+  creatingPackageId.value = item.id
+  paymentError.value = ''
+  try {
+    const order = await billingAPI.createRechargeOrder(item.id)
+    activeOrder.value = order
+    currentTime.value = Date.now()
+    qrDataUrl.value = order.qr_code
+      ? await QRCode.toDataURL(order.qr_code, { width: 260, margin: 1, errorCorrectionLevel: 'M' })
+      : ''
+    if (order.status === 'pending') startPolling()
+    if (order.status === 'paid') {
+      await Promise.all([refresh(), loadTx(), loadRecharge()])
+    }
+  } catch (err) {
+    error.value = err instanceof Error ? err.message : '创建充值订单失败'
+  } finally {
+    creatingPackageId.value = null
+  }
+}
+
+async function checkActiveOrder() {
+  if (!activeOrder.value || checkingOrder.value) return
+  checkingOrder.value = true
+  paymentError.value = ''
+  try {
+    const order = await billingAPI.rechargeOrder(activeOrder.value.order_no)
+    activeOrder.value = order
+    if (order.status !== 'pending') {
+      stopPolling()
+      await Promise.all([refresh(), loadTx(), loadRecharge()])
+    }
+  } catch (err) {
+    paymentError.value = err instanceof Error ? err.message : '查询订单失败，请稍后重试'
+  } finally {
+    checkingOrder.value = false
+  }
+}
+
+function closePayment() {
+  stopPolling()
+  activeOrder.value = null
+  qrDataUrl.value = ''
+  paymentError.value = ''
+}
+
 async function reload() {
   loading.value = true
   error.value = ''
   try {
-    await Promise.all([refresh(), loadUsage(), loadTx()])
+    await Promise.all([refresh(), loadUsage(), loadTx(), loadRecharge()])
   } catch (err) {
     error.value = err instanceof Error ? err.message : '加载失败'
   } finally {
@@ -242,6 +471,7 @@ watch([usagePage, usageFilter], loadUsage, { deep: true })
 watch(txPage, loadTx)
 
 onMounted(reload)
+onBeforeUnmount(stopPolling)
 </script>
 
 <style scoped>
@@ -302,8 +532,96 @@ onMounted(reload)
   font-size: 13px;
   color: var(--text-2);
 }
+.head-actions, .payment-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.panel-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+.panel-desc { color: var(--text-3); font-size: 13px; }
+.payment-warning, .empty-card {
+  padding: 14px;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius);
+  color: var(--text-2);
+  background: var(--bg-2);
+}
+.package-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+}
+.package-card {
+  display: flex;
+  flex-direction: column;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-2);
+}
+.package-card h3 { font-size: 14px; color: var(--text-1); }
+.package-points {
+  margin-top: 10px;
+  font-size: 25px;
+  font-weight: 700;
+  color: var(--accent-text);
+}
+.package-points span { font-size: 12px; color: var(--text-3); }
+.package-bonus { margin-top: 3px; font-size: 12px; color: var(--success); }
+.package-price { margin: 12px 0; font-size: 16px; font-weight: 650; }
+.package-button { margin-top: auto; width: 100%; }
+.payment-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background: rgba(0, 0, 0, 0.68);
+}
+.payment-dialog {
+  position: relative;
+  width: min(420px, 100%);
+  padding: 24px;
+  text-align: center;
+}
+.payment-dialog h2 { font-size: 20px; }
+.payment-close {
+  position: absolute;
+  top: 8px;
+  right: 10px;
+  border: none;
+  background: transparent;
+  color: var(--text-2);
+  font-size: 24px;
+  cursor: pointer;
+}
+.payment-close:hover { color: var(--text-0); }
+.payment-summary { margin-top: 8px; color: var(--text-2); font-size: 13px; }
+.qr-frame {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 280px;
+  height: 280px;
+  margin: 18px auto 10px;
+  border-radius: 12px;
+  background: #fff;
+  color: #333;
+}
+.qr-frame img { width: 260px; height: 260px; }
+.payment-countdown { color: var(--text-3); font-size: 13px; }
+.payment-result { color: var(--success); font-weight: 650; }
+.payment-actions { justify-content: center; margin-top: 18px; }
 @media (max-width: 900px) {
   .page { padding: 20px 16px 32px; }
   .stat-grid { grid-template-columns: 1fr; }
+  .page-head { align-items: stretch; }
+  .head-actions { flex-shrink: 0; }
 }
 </style>

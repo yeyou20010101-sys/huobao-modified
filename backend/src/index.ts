@@ -32,6 +32,7 @@ import { resolveSessionUser } from './utils/session.js'
 import { canUserReadStaticPath } from './utils/storage.js'
 import { unauthorized, notFound } from './utils/response.js'
 import { recoverStaleHolds } from './services/billing.js'
+import { closeExpiredRechargeOrders } from './services/alipay.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const projectRoot = path.resolve(__dirname, '../..')
@@ -138,6 +139,13 @@ try {
 } catch (err) {
   console.warn('[billing] recover stale holds failed:', err)
 }
+closeExpiredRechargeOrders()
+  .then((result) => {
+    if (result.paid || result.closed || result.failed) {
+      console.log(`[alipay] expired orders: paid=${result.paid} closed=${result.closed} failed=${result.failed}`)
+    }
+  })
+  .catch((err) => console.warn('[alipay] close expired orders failed:', err))
 console.log(`🚀 鲸鱼短剧 TS server on http://${hostname}:${port}`)
 console.log(`   本机: http://localhost:${port}  |  局域网请用本机 IP:${port}（CORS 已允许私有网段 Origin）`)
 serve({ fetch: app.fetch, port, hostname })

@@ -507,6 +507,7 @@ sqlite.exec(`
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id INTEGER NOT NULL,
     usage_record_id INTEGER,
+    recharge_order_id INTEGER,
     type TEXT NOT NULL,
     points INTEGER NOT NULL,
     available_after INTEGER NOT NULL,
@@ -516,6 +517,56 @@ sqlite.exec(`
     created_at TEXT NOT NULL
   );
   CREATE INDEX IF NOT EXISTS idx_wallet_transactions_user_created ON wallet_transactions(user_id, created_at);
+
+  CREATE TABLE IF NOT EXISTS recharge_packages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    price_cents INTEGER NOT NULL,
+    base_points INTEGER NOT NULL,
+    bonus_points INTEGER NOT NULL DEFAULT 0,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    is_active INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_recharge_packages_active_sort
+    ON recharge_packages(is_active, sort_order);
+
+  CREATE TABLE IF NOT EXISTS recharge_orders (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    order_no TEXT NOT NULL UNIQUE,
+    user_id INTEGER NOT NULL,
+    package_id INTEGER,
+    package_name TEXT NOT NULL,
+    amount_cents INTEGER NOT NULL,
+    base_points INTEGER NOT NULL,
+    bonus_points INTEGER NOT NULL DEFAULT 0,
+    total_points INTEGER NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    qr_code TEXT,
+    alipay_trade_no TEXT UNIQUE,
+    expires_at TEXT NOT NULL,
+    notified_at TEXT,
+    paid_at TEXT,
+    closed_at TEXT,
+    error_msg TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_recharge_orders_user_created
+    ON recharge_orders(user_id, created_at);
+  CREATE INDEX IF NOT EXISTS idx_recharge_orders_status_expires
+    ON recharge_orders(status, expires_at);
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_recharge_orders_open_package
+    ON recharge_orders(user_id, package_id)
+    WHERE status = 'pending';
+`)
+
+ensureColumn('wallet_transactions', 'recharge_order_id', 'INTEGER')
+sqlite.exec(`
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_wallet_transactions_recharge_order
+    ON wallet_transactions(recharge_order_id)
+    WHERE recharge_order_id IS NOT NULL;
 `)
 
 sqlite.exec(`

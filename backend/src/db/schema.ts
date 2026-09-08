@@ -446,6 +446,7 @@ export const walletTransactions = sqliteTable('wallet_transactions', {
   id: integer('id').primaryKey({ autoIncrement: true }),
   userId: integer('user_id').notNull(),
   usageRecordId: integer('usage_record_id'),
+  rechargeOrderId: integer('recharge_order_id'),
   type: text('type').notNull(),
   points: integer('points').notNull(),
   availableAfter: integer('available_after').notNull(),
@@ -455,4 +456,43 @@ export const walletTransactions = sqliteTable('wallet_transactions', {
   createdAt: text('created_at').notNull(),
 }, (table) => ({
   userCreatedIdx: index('idx_wallet_transactions_user_created').on(table.userId, table.createdAt),
+}))
+
+export const rechargePackages = sqliteTable('recharge_packages', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  name: text('name').notNull(),
+  priceCents: integer('price_cents').notNull(),
+  basePoints: integer('base_points').notNull(),
+  bonusPoints: integer('bonus_points').notNull().default(0),
+  sortOrder: integer('sort_order').notNull().default(0),
+  isActive: integer('is_active', { mode: 'boolean' }).notNull().default(true),
+  createdAt: text('created_at').notNull(),
+  updatedAt: text('updated_at').notNull(),
+}, (table) => ({
+  activeSortIdx: index('idx_recharge_packages_active_sort').on(table.isActive, table.sortOrder),
+}))
+
+export const rechargeOrders = sqliteTable('recharge_orders', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  orderNo: text('order_no').notNull().unique(),
+  userId: integer('user_id').notNull(),
+  packageId: integer('package_id'),
+  packageName: text('package_name').notNull(),
+  amountCents: integer('amount_cents').notNull(),
+  basePoints: integer('base_points').notNull(),
+  bonusPoints: integer('bonus_points').notNull().default(0),
+  totalPoints: integer('total_points').notNull(),
+  status: text('status').notNull().default('pending'),
+  qrCode: text('qr_code'),
+  alipayTradeNo: text('alipay_trade_no').unique(),
+  expiresAt: text('expires_at').notNull(),
+  notifiedAt: text('notified_at'),
+  paidAt: text('paid_at'),
+  closedAt: text('closed_at'),
+  errorMsg: text('error_msg'),
+  createdAt: text('created_at').notNull(),
+  updatedAt: text('updated_at').notNull(),
+}, (table) => ({
+  userCreatedIdx: index('idx_recharge_orders_user_created').on(table.userId, table.createdAt),
+  statusExpiresIdx: index('idx_recharge_orders_status_expires').on(table.status, table.expiresAt),
 }))

@@ -10,8 +10,32 @@ import { downloadFile } from '../utils/storage.js'
 import { ViduVideoAdapter } from '../services/adapters/vidu-video'
 import { logTaskError, logTaskProgress, logTaskSuccess, logTaskWarn } from '../utils/task-logger.js'
 import { refundTaskByRef, settleTaskByRef } from '../services/billing.js'
+import { handleAlipayNotification, type AlipayNotification } from '../services/alipay.js'
 
 const app = new Hono()
+
+// POST /webhooks/alipay — 支付宝异步通知必须返回纯文本 success/failure
+app.post('/alipay', async (c) => {
+  try {
+    const body = await c.req.parseBody()
+    const params: AlipayNotification = {}
+    for (const [key, value] of Object.entries(body)) {
+      if (typeof value === 'string') params[key] = value
+    }
+    const order = handleAlipayNotification(params)
+    logTaskSuccess('Webhook', 'alipay-recharge-credited', {
+      orderNo: order.orderNo,
+      userId: order.userId,
+      points: order.totalPoints,
+    })
+    return c.text('success')
+  } catch (err) {
+    logTaskError('Webhook', 'alipay-notify-rejected', {
+      error: err instanceof Error ? err.message : 'unknown error',
+    })
+    return c.text('failure')
+  }
+})
 
 // POST /webhooks/vidu
 // Vidu 回调格式: { task_id, state, video_url, ... }

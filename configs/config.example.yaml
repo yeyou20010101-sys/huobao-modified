@@ -45,3 +45,12 @@ mail:
   smtp_user: ""
   smtp_pass: ""
   from: "鲸鱼短剧 <noreply@example.com>"
+
+# 支付宝当面付仅通过环境变量配置，不要将真实密钥写入本文件或提交到仓库：
+# ALIPAY_APP_ID=应用 ID
+# ALIPAY_PRIVATE_KEY=应用私钥 PEM（换行可写成 \n）
+# ALIPAY_PUBLIC_KEY=支付宝公钥 PEM（不是应用公钥）
+# ALIPAY_SELLER_ID=收款支付宝账号对应的 seller_id
+# ALIPAY_NOTIFY_URL=https://你的域名/webhooks/alipay
+# ALIPAY_GATEWAY=https://openapi.alipay.com/gateway.do
+# ALIPAY_KEY_TYPE=PKCS1（私钥为 BEGIN RSA PRIVATE KEY）或 PKCS8（BEGIN PRIVATE KEY）

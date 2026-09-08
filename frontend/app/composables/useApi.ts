@@ -191,6 +191,46 @@ export const dramaAPI = {
   removeMember: (id: number, userId: number) => api.del(`/dramas/${id}/members/${userId}`),
 }
 
+export interface RechargePackage {
+  id: number
+  name: string
+  price_cents: number
+  base_points: number
+  bonus_points: number
+  total_points: number
+  sort_order: number
+  is_active?: boolean
+}
+
+export interface RechargeOrder {
+  id: number
+  order_no: string
+  package_id: number | null
+  package_name: string
+  amount_cents: number
+  base_points: number
+  bonus_points: number
+  total_points: number
+  status: 'pending' | 'paid' | 'closed' | 'failed'
+  qr_code?: string | null
+  expires_at: string
+  paid_at?: string | null
+  closed_at?: string | null
+  error_msg?: string | null
+  alipay_trade_no?: string | null
+  created_at: string
+  user_id?: number
+  username?: string | null
+  email?: string | null
+}
+
+export interface PageResult<T> {
+  items: T[]
+  total: number
+  page: number
+  page_size: number
+}
+
 export const adminAPI = {
   users: () => api.get('/admin/users'),
   patchUser: (id: number, data: { role?: string; status?: string }) => api.patch(`/admin/users/${id}`, data),
@@ -206,12 +246,22 @@ export const adminAPI = {
   patchPrice: (id: number, data: Record<string, unknown>) => api.patch(`/admin/prices/${id}`, data),
   usage: (params?: Record<string, string | number | undefined>) => api.get(`/admin/usage${toQuery(params)}`),
   transactions: (params?: Record<string, string | number | undefined>) => api.get(`/admin/transactions${toQuery(params)}`),
+  rechargePackages: () => api.get<RechargePackage[]>('/admin/recharge-packages'),
+  createRechargePackage: (data: Omit<RechargePackage, 'id' | 'total_points'>) => api.post<RechargePackage>('/admin/recharge-packages', data),
+  patchRechargePackage: (id: number, data: Partial<Omit<RechargePackage, 'id' | 'total_points'>>) => api.patch<RechargePackage>(`/admin/recharge-packages/${id}`, data),
+  deleteRechargePackage: (id: number) => api.del(`/admin/recharge-packages/${id}`),
+  rechargeOrders: (params?: Record<string, string | number | undefined>) => api.get<PageResult<RechargeOrder>>(`/admin/recharge-orders${toQuery(params)}`),
+  rechargeOrder: (orderNo: string) => api.get<RechargeOrder>(`/admin/recharge-orders/${encodeURIComponent(orderNo)}`),
 }
 
 export const billingAPI = {
   summary: () => api.get('/billing/summary'),
   usage: (params?: Record<string, string | number | undefined>) => api.get(`/billing/usage${toQuery(params)}`),
   transactions: (params?: Record<string, string | number | undefined>) => api.get(`/billing/transactions${toQuery(params)}`),
+  rechargePackages: () => api.get<{ payment_ready: boolean; items: RechargePackage[] }>('/billing/recharge-packages'),
+  createRechargeOrder: (packageId: number) => api.post<RechargeOrder>('/billing/recharge-orders', { package_id: packageId }),
+  rechargeOrder: (orderNo: string) => api.get<RechargeOrder>(`/billing/recharge-orders/${encodeURIComponent(orderNo)}`),
+  rechargeOrders: (params?: Record<string, string | number | undefined>) => api.get<PageResult<RechargeOrder>>(`/billing/recharge-orders${toQuery(params)}`),
 }
 
 export const episodeAPI = {

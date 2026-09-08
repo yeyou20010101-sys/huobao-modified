@@ -13,6 +13,8 @@
       <button type="button" :class="['chip', { active: tab === 'ai' }]" @click="tab = 'ai'">AI 配置</button>
       <button type="button" :class="['chip', { active: tab === 'billing' }]" @click="tab = 'billing'">余额与计费</button>
       <button type="button" :class="['chip', { active: tab === 'prices' }]" @click="tab = 'prices'">价格管理</button>
+      <button type="button" :class="['chip', { active: tab === 'recharge-packages' }]" @click="tab = 'recharge-packages'">充值套餐</button>
+      <button type="button" :class="['chip', { active: tab === 'recharge-orders' }]" @click="tab = 'recharge-orders'">充值订单</button>
     </div>
 
     <p v-if="error" class="auth-error" role="alert">{{ error }}</p>
@@ -243,6 +245,132 @@
         </table>
       </div>
     </section>
+
+    <section v-else-if="tab === 'recharge-packages'" class="admin-panel card">
+      <form class="claim-row" @submit.prevent="saveRechargePackage">
+        <label class="field">
+          <span class="field-label">套餐名称</span>
+          <input v-model="packageForm.name" class="input" maxlength="40" required />
+        </label>
+        <label class="field">
+          <span class="field-label">金额（元）</span>
+          <input v-model="packageForm.priceYuan" class="input" type="number" min="0.01" step="0.01" required />
+        </label>
+        <label class="field">
+          <span class="field-label">基础点数</span>
+          <input v-model="packageForm.basePoints" class="input" type="number" min="1" required />
+        </label>
+        <label class="field">
+          <span class="field-label">赠送点数</span>
+          <input v-model="packageForm.bonusPoints" class="input" type="number" min="0" required />
+        </label>
+        <label class="field">
+          <span class="field-label">排序</span>
+          <input v-model="packageForm.sortOrder" class="input" type="number" required />
+        </label>
+        <button class="btn btn-primary" type="submit" :disabled="savingPackage">
+          {{ savingPackage ? '保存中…' : packageForm.id ? '保存修改' : '新增套餐' }}
+        </button>
+        <button v-if="packageForm.id" class="btn" type="button" @click="resetPackageForm">取消编辑</button>
+      </form>
+      <div class="table-wrap">
+        <table class="admin-table">
+          <thead>
+            <tr>
+              <th>排序</th>
+              <th>名称</th>
+              <th>金额</th>
+              <th>基础点数</th>
+              <th>赠送</th>
+              <th>合计</th>
+              <th>状态</th>
+              <th>操作</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-if="!rechargePackages.length">
+              <td colspan="8">暂无充值套餐</td>
+            </tr>
+            <tr v-for="item in rechargePackages" :key="item.id">
+              <td>{{ item.sort_order }}</td>
+              <td>{{ item.name }}</td>
+              <td>¥ {{ formatMoney(item.price_cents) }}</td>
+              <td>{{ item.base_points }}</td>
+              <td>{{ item.bonus_points }}</td>
+              <td>{{ item.total_points }}</td>
+              <td>{{ item.is_active ? '已上架' : '已下架' }}</td>
+              <td class="action-cell">
+                <button class="btn btn-ghost" type="button" @click="editRechargePackage(item)">编辑</button>
+                <button class="btn btn-ghost" type="button" @click="toggleRechargePackage(item)">
+                  {{ item.is_active ? '下架' : '上架' }}
+                </button>
+                <button class="btn btn-ghost danger" type="button" @click="deleteRechargePackage(item)">删除</button>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section v-else-if="tab === 'recharge-orders'" class="admin-panel card">
+      <div class="claim-row">
+        <label class="field">
+          <span class="field-label">订单状态</span>
+          <select v-model="orderFilter.status" class="input">
+            <option value="">全部</option>
+            <option value="pending">待支付</option>
+            <option value="paid">已支付</option>
+            <option value="closed">已关闭</option>
+            <option value="failed">创建失败</option>
+          </select>
+        </label>
+        <label class="field">
+          <span class="field-label">用户 ID</span>
+          <input v-model="orderFilter.userId" class="input" type="number" min="1" />
+        </label>
+        <label class="field grow">
+          <span class="field-label">订单号</span>
+          <input v-model="orderFilter.orderNo" class="input" />
+        </label>
+        <button class="btn" type="button" @click="loadRechargeOrders">查询</button>
+      </div>
+      <div class="table-wrap">
+        <table class="admin-table">
+          <thead>
+            <tr>
+              <th>创建时间</th>
+              <th>订单号</th>
+              <th>用户</th>
+              <th>套餐</th>
+              <th>金额</th>
+              <th>点数</th>
+              <th>状态</th>
+              <th>支付宝交易号</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-if="!rechargeOrders.length">
+              <td colspan="8">暂无充值订单</td>
+            </tr>
+            <tr v-for="order in rechargeOrders" :key="order.id">
+              <td>{{ formatTime(order.created_at) }}</td>
+              <td>{{ order.order_no }}</td>
+              <td>{{ order.username || order.user_id }}</td>
+              <td>{{ order.package_name }}</td>
+              <td>¥ {{ formatMoney(order.amount_cents) }}</td>
+              <td>{{ order.total_points }}</td>
+              <td>{{ rechargeStatusLabel(order.status) }}</td>
+              <td>{{ order.alipay_trade_no || '—' }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="pager">
+        <button class="btn btn-ghost" type="button" :disabled="orderPage <= 1" @click="orderPage -= 1">上一页</button>
+        <span>第 {{ orderPage }} 页 / 共 {{ orderTotal }} 条</span>
+        <button class="btn btn-ghost" type="button" :disabled="orderPage * 30 >= orderTotal" @click="orderPage += 1">下一页</button>
+      </div>
+    </section>
   </div>
 </template>
 
@@ -270,12 +398,77 @@ const priceForm = reactive({
   model: '',
   unit_points: 1,
 })
+const rechargePackages = ref([])
+const rechargeOrders = ref([])
+const savingPackage = ref(false)
+const orderPage = ref(1)
+const orderTotal = ref(0)
+const packageForm = reactive({
+  id: null,
+  name: '',
+  priceYuan: '',
+  basePoints: '',
+  bonusPoints: 0,
+  sortOrder: 0,
+})
+const orderFilter = reactive({
+  status: '',
+  userId: '',
+  orderNo: '',
+})
 
 function formatTime(value) {
   if (!value) return '—'
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) return value
   return date.toLocaleString('zh-CN', { hour12: false })
+}
+
+function formatMoney(cents) {
+  return (Number(cents || 0) / 100).toFixed(2)
+}
+
+function rechargeStatusLabel(status) {
+  return {
+    pending: '待支付',
+    paid: '已支付',
+    closed: '已关闭',
+    failed: '创建失败',
+  }[status] || status
+}
+
+function resetPackageForm() {
+  packageForm.id = null
+  packageForm.name = ''
+  packageForm.priceYuan = ''
+  packageForm.basePoints = ''
+  packageForm.bonusPoints = 0
+  packageForm.sortOrder = 0
+}
+
+function editRechargePackage(item) {
+  packageForm.id = item.id
+  packageForm.name = item.name
+  packageForm.priceYuan = formatMoney(item.price_cents)
+  packageForm.basePoints = item.base_points
+  packageForm.bonusPoints = item.bonus_points
+  packageForm.sortOrder = item.sort_order
+}
+
+async function loadRechargeOrders() {
+  try {
+    const result = await adminAPI.rechargeOrders({
+      page: orderPage.value,
+      page_size: 30,
+      status: orderFilter.status || undefined,
+      user_id: orderFilter.userId || undefined,
+      order_no: orderFilter.orderNo || undefined,
+    })
+    rechargeOrders.value = result.items
+    orderTotal.value = result.total
+  } catch (err) {
+    toast.error(err instanceof Error ? err.message : '加载充值订单失败')
+  }
 }
 
 async function load() {
@@ -291,6 +484,8 @@ async function load() {
       adminUsage.value = usage.items || []
     }
     if (tab.value === 'prices') prices.value = await adminAPI.prices()
+    if (tab.value === 'recharge-packages') rechargePackages.value = await adminAPI.rechargePackages()
+    if (tab.value === 'recharge-orders') await loadRechargeOrders()
   } catch (err) {
     error.value = err instanceof Error ? err.message : '加载失败'
   } finally {
@@ -393,7 +588,70 @@ async function patchPrice(row, payload) {
   }
 }
 
+async function saveRechargePackage() {
+  const priceCents = Math.round(Number(packageForm.priceYuan) * 100)
+  const basePoints = Number(packageForm.basePoints)
+  const bonusPoints = Number(packageForm.bonusPoints)
+  const sortOrder = Number(packageForm.sortOrder)
+  if (!packageForm.name.trim() || !Number.isInteger(priceCents) || priceCents < 1) {
+    toast.error('请填写正确的套餐名称和金额')
+    return
+  }
+  if (!Number.isInteger(basePoints) || basePoints < 1 || !Number.isInteger(bonusPoints) || bonusPoints < 0) {
+    toast.error('基础点数必须为正整数，赠送点数必须为非负整数')
+    return
+  }
+
+  savingPackage.value = true
+  const payload = {
+    name: packageForm.name.trim(),
+    price_cents: priceCents,
+    base_points: basePoints,
+    bonus_points: bonusPoints,
+    sort_order: sortOrder,
+  }
+  try {
+    if (packageForm.id) {
+      await adminAPI.patchRechargePackage(packageForm.id, payload)
+    } else {
+      await adminAPI.createRechargePackage(payload)
+    }
+    toast.success(packageForm.id ? '套餐已更新' : '套餐已创建')
+    resetPackageForm()
+    rechargePackages.value = await adminAPI.rechargePackages()
+  } catch (err) {
+    toast.error(err instanceof Error ? err.message : '保存套餐失败')
+  } finally {
+    savingPackage.value = false
+  }
+}
+
+async function toggleRechargePackage(item) {
+  try {
+    await adminAPI.patchRechargePackage(item.id, { is_active: !item.is_active })
+    rechargePackages.value = await adminAPI.rechargePackages()
+    toast.success(item.is_active ? '套餐已下架' : '套餐已上架')
+  } catch (err) {
+    toast.error(err instanceof Error ? err.message : '更新套餐失败')
+  }
+}
+
+async function deleteRechargePackage(item) {
+  if (!confirm(`删除充值套餐「${item.name}」？已有订单时将改为下架。`)) return
+  try {
+    await adminAPI.deleteRechargePackage(item.id)
+    rechargePackages.value = await adminAPI.rechargePackages()
+    if (packageForm.id === item.id) resetPackageForm()
+    toast.success('套餐已删除或下架')
+  } catch (err) {
+    toast.error(err instanceof Error ? err.message : '删除套餐失败')
+  }
+}
+
 watch(tab, load)
+watch(orderPage, () => {
+  if (tab.value === 'recharge-orders') loadRechargeOrders()
+})
 onMounted(load)
 </script>
 
@@ -427,4 +685,19 @@ onMounted(load)
 .grow { flex: 1; min-width: 180px; }
 .sub-title { font-size: 14px; font-weight: 650; margin: 20px 0 10px; }
 .table-wrap { overflow-x: auto; }
+.action-cell {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+.danger { color: var(--error); }
+.pager {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 14px;
+  color: var(--text-2);
+  font-size: 13px;
+}
 </style>
